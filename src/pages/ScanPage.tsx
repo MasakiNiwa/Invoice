@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Clock, Cpu, Loader2, RotateCcw, ScrollText, Square, Upload } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Clock, Cpu, Loader2, RotateCcw as RotateLeft, RotateCw as RotateRight, RotateCcw, ScrollText, Square, Upload } from 'lucide-react'
 import { CandidateCard } from '../components/CandidateCard'
 import { ImageInput } from '../components/ImageInput'
 import { ManualCheck } from '../components/ManualCheck'
@@ -8,14 +8,18 @@ import { Legend, ScanViewer } from '../components/ScanViewer'
 import { ScanLog } from '../components/ScanLog'
 import { StageStepper } from '../components/StageStepper'
 import { useScan } from '../hooks/useScan'
-import { blobToCanvas } from '../lib/image'
+import { blobToCanvas, rotateCanvas } from '../lib/image'
 import { isPdf, loadPdfPage, type PdfTextItem } from '../lib/pdf'
 import { makeSampleInvoice } from '../lib/sample'
 import { useSettings } from '../store/settings'
 import { isPrimary } from '../lib/ocr/aggregate'
 import { useSession } from '../store/session'
+import { makeThumb, useHistory } from '../store/history'
 import { checkRequirements } from '../lib/requirements'
 import { RequirementsPanel } from '../components/RequirementsPanel'
+import { ScanOverlay } from '../components/ScanOverlay'
+import { EngineBadge } from '../components/EngineBadge'
+import { usePreloadModels } from '../hooks/usePaddleStatus'
 import type { Rect } from '../lib/image'
 
 interface Doc {
@@ -26,6 +30,7 @@ interface Doc {
 
 export default function ScanPage() {
   const { state, start, abort, reset } = useScan()
+  usePreloadModels()
   const [doc, setDoc] = useState<Doc | null>(null)
   const [loading, setLoading] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -119,6 +124,13 @@ export default function ScanPage() {
   const onSample = () => scanDoc({ name: 'サンプル請求書(架空)', canvas: makeSampleInvoice() })
 
   const scanning = state.status === 'scanning'
+  /** 表示・再スキャンに使う画像(自動で向きを補正した場合はその画像) */
+  const viewImage = state.image ?? doc?.canvas ?? null
+  const rotate = (deg: 90 | 270) => {
+    if (!doc || !viewImage) return
+    // 回転すると PDF のテキスト層の座標が合わなくなるので画像として扱う
+    scanDoc({ name: doc.name, canvas: rotateCanvas(viewImage, deg) })
+  }
   const elapsed = ((state.finishedAt || (scanning ? performance.now() : state.startedAt)) - state.startedAt) / 1000
   const cands = state.candidates.filter((c) => showCorrections || c.kind !== 'corrected')
   // 主候補(T付き/登録番号付近・検算OK)は最大3件、それ以外は折りたたみ
@@ -133,7 +145,10 @@ export default function ScanPage() {
   }, [bestDigits, scanning, setSessionResult])
   useEffect(() => () => setSessionResult(null, false), [setSessionResult])
 
-  // 記載事項チェック(行テキストが得られてから)
+  // 完了したら履歴に保存(1スキャンにつき1回)
+  const addHistory = useHistory((s) => s.add)
+  const saveHistory = useSettings((s) => s.saveHistory)
+  const savedFor = useRef(0)
   const textRows = state.textRows
   const report = useMemo(() => {
     if (!textRows) return null
@@ -141,6 +156,23 @@ export default function ScanPage() {
     const regNo = bestDigits ?? weak?.digits ?? null
     return checkRequirements(textRows.rows, { regNo, regNoWeak: !bestDigits && !!weak })
   }, [textRows, bestDigits, state.candidates])
+
+  useEffect(() => {
+    if (state.status !== 'done' || !doc || !saveHistory || savedFor.current === state.startedAt) return
+    savedFor.current = state.startedAt
+    const primary = state.candidates.filter(isPrimary)
+    addHistory({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      at: new Date().toISOString(),
+      name: doc.name,
+      thumb: makeThumb(state.image ?? doc.canvas),
+      digits: primary[0]?.digits ?? null,
+      others: primary.slice(1, 3).map((c) => c.digits),
+      requirements: report ? { summary: report.summary, text: report.summaryText, simplified: report.simplified } : null,
+      engine: state.engine?.label ?? '',
+      seconds: (state.finishedAt - state.startedAt) / 1000,
+    })
+  }, [state.status, state.startedAt, state.finishedAt, state.candidates, state.image, state.engine, doc, saveHistory, report, addHistory])
 
   return (
     <div className="space-y-4">
@@ -160,6 +192,7 @@ export default function ScanPage() {
             <p className="mt-2 text-sm text-slate-500">適格請求書の「T + 13桁」を画像から探し出し、チェックディジットで確認。国税庁の公表サイトへすぐ飛べます。</p>
           </section>
           <ImageInput onFile={openFile} onSample={onSample} />
+          <div className="flex justify-center"><EngineBadge /></div>
           <ManualCheck />
         </>
       )}
@@ -178,10 +211,19 @@ export default function ScanPage() {
             <div className="card p-3">
               <div className="mb-2 flex items-center gap-2 text-sm">
                 <span className="truncate font-medium">{doc.name}</span>
-                <span className="shrink-0 text-xs text-slate-400">{doc.canvas.width}×{doc.canvas.height}</span>
+                <span className="shrink-0 text-xs text-slate-400">{(viewImage ?? doc.canvas).width}×{(viewImage ?? doc.canvas).height}</span>
+                {state.rotation !== 0 && <span className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">向きを自動補正</span>}
+                <span className="ml-auto flex shrink-0 gap-1">
+                  <button type="button" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800" title="左に回転して読み直す" disabled={scanning} onClick={() => rotate(270)}>
+                    <RotateLeft size={16} />
+                  </button>
+                  <button type="button" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800" title="右に回転して読み直す" disabled={scanning} onClick={() => rotate(90)}>
+                    <RotateRight size={16} />
+                  </button>
+                </span>
                 {doc.pdf && doc.pdf.numPages > 1 && (
                   <select
-                    className="ml-auto rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
+                    className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-700 dark:bg-slate-900"
                     value={doc.pdf.page}
                     disabled={scanning}
                     onChange={(e) => void openFile(doc.pdf!.file, Number(e.target.value))}
@@ -192,7 +234,7 @@ export default function ScanPage() {
                   </select>
                 )}
               </div>
-              <ScanViewer image={doc.canvas} state={state} highlight={hl} highlightRects={hlRects} />
+              <ScanViewer image={viewImage ?? doc.canvas} state={state} highlight={hl} highlightRects={hlRects} overlay={<ScanOverlay state={state} />} />
               <div className="mt-2"><Legend /></div>
             </div>
             <ImageInput onFile={openFile} onSample={onSample} compact />
@@ -210,7 +252,7 @@ export default function ScanPage() {
                   {scanning ? (
                     <button className="btn-danger px-3 py-1.5" onClick={abort}><Square size={14} /> 中止</button>
                   ) : (
-                    <button className="btn-ghost px-3 py-1.5" onClick={() => scanDoc(doc)}><RotateCcw size={14} /> 再スキャン</button>
+                    <button className="btn-ghost px-3 py-1.5" onClick={() => scanDoc(state.image ? { name: doc.name, canvas: state.image } : doc)}><RotateCcw size={14} /> 再スキャン</button>
                   )}
                   <button className="btn-ghost px-3 py-1.5" onClick={() => { reset(); setDoc(null) }} disabled={scanning}>閉じる</button>
                 </div>

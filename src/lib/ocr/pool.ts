@@ -15,6 +15,8 @@ export interface OcrResult { text: string; conf: number; lines: OcrLine[] }
 export interface OcrParams {
   psm: '3' | '6' | '7' | '8' | '11' | '13'
   whitelist?: string
+  /** 文字行の位置だけ求める(PaddleOCR のみ。認識を省略して高速) */
+  detectOnly?: boolean
 }
 
 interface Slot {

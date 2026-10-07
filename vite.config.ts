@@ -18,6 +18,8 @@ if (!commit) {
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
+  // Worker 内でも動的 import(onnxruntime の遅延読み込み)を使うため ES モジュール形式
+  worker: { format: 'es' },
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __BUILD_DATE__: JSON.stringify(new Date().toISOString()),
