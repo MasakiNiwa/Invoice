@@ -19,7 +19,7 @@ function HeaderActions() {
       {hasDoc && (
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
           onClick={() => {
             requestClear()
             navigate('/')
@@ -34,7 +34,7 @@ function HeaderActions() {
           href={invoiceKohyoUrl(best.digits)}
           target="_blank"
           rel="noreferrer"
-          className="relative inline-flex items-center gap-1 rounded-lg bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700"
+          className="relative inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700"
           title={`T${best.digits} を国税庁 公表サイトで確認`}
         >
           {!scanning && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-ping rounded-full bg-emerald-400" />}
@@ -42,7 +42,7 @@ function HeaderActions() {
         </a>
       ) : (
         <span
-          className="inline-flex cursor-not-allowed items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-400 dark:bg-slate-800"
+          className="inline-flex shrink-0 cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-400 dark:bg-slate-800"
           title="T番号を読み取ると押せるようになります"
           aria-disabled="true"
         >
@@ -59,7 +59,7 @@ export function TopBar() {
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-3 sm:px-4">
         <NavLink to="/" className="flex min-w-0 items-center gap-2 font-bold">
           <img src="./favicon.svg" alt="" className="h-7 w-7 shrink-0" />
-          <span className="truncate text-sm sm:text-base">インボイス確認ツール</span>
+          <span className="truncate text-sm sm:text-base"><span className="hidden min-[400px]:inline">インボイス</span>確認ツール</span>
         </NavLink>
         <nav className="ml-auto hidden items-center gap-1 md:flex">
           {items.map(({ to, label, icon: Icon, end }) => (
@@ -76,7 +76,7 @@ export function TopBar() {
             </NavLink>
           ))}
         </nav>
-        <div className="ml-auto md:ml-2">
+        <div className="ml-auto shrink-0 md:ml-2">
           <HeaderActions />
         </div>
       </div>

@@ -25,7 +25,7 @@ describe('aggregate', () => {
   })
   it('weak valid reading at the same spot is shadowed', () => {
     const other = '7810643631847'
-    const c = aggregate([r(NTA), r(NTA), r(NTA), { ...r(other), valid: true }])
+    const c = aggregate([r(NTA), r(NTA), r(NTA), { ...r(other), valid: true, rect: { x: 150, y: 12, w: 200, h: 18 } }])
     expect(c.find((x) => x.digits === other)?.shadowed).toBe(true)
     expect(c[0].digits).toBe(NTA)
   })

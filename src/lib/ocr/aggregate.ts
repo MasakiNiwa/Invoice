@@ -70,6 +70,14 @@ export function readingWeight(r: Reading): number {
   return conf * (r.hasT ? 1.2 : 0.8) * Math.pow(0.7, r.substitutions) * STAGE_WEIGHT[r.stage]
 }
 
+/** 2つの矩形が同じ文字行にあるか(縦方向が半分以上重なり、横に大きく離れていない) */
+export function sameLine(a: Rect, b: Rect): boolean {
+  const yOverlap = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+  if (yOverlap < Math.min(a.h, b.h) * 0.5) return false
+  const xGap = Math.max(a.x, b.x) - Math.min(a.x + a.w, b.x + b.w)
+  return xGap < Math.max(a.h, b.h) * 4
+}
+
 function mergeRects(rects: Rect[], r: Rect) {
   if (!rects.some((x) => overlapRatio(x, r) > 0.6)) rects.push(r)
 }
@@ -149,10 +157,10 @@ export function aggregate(readings: Reading[]): Candidate[] {
   }
 
   const list = [...map.values()]
-  // 同じ位置で、より強い検算OK候補の半分未満のスコアしかない検算OK候補は「別の読み」扱い
+  // 同じ行で、より強い検算OK候補の 2/3 未満のスコアしかない検算OK候補は「別の読み」扱い
   const strong = list.filter((c) => c.valid).sort((a, b) => b.score - a.score)
   for (const c of strong) {
-    const better = strong.find((o) => o !== c && o.score > c.score * 2 && o.rects.some((a) => c.rects.some((b) => overlapRatio(a, b) > 0.5)))
+    const better = strong.find((o) => o !== c && !o.shadowed && o.score > c.score * 1.5 && o.rects.some((a) => c.rects.some((b) => sameLine(a, b))))
     if (better) {
       c.shadowed = true
       c.note = `同じ位置の別の読み(有力: T${better.digits})`

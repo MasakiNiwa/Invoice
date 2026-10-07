@@ -29,10 +29,10 @@ interface Props {
 export function RequirementsPanel({ report, scanning, japaneseOff, rows, onHover }: Props) {
   return (
     <div className="card p-4">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
         <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500 dark:bg-slate-800">目安</span>
-        {report?.simplified && <span className="ml-auto rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-normal text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易インボイス(レシート)と判定</span>}
+        <span className="whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500 dark:bg-slate-800">目安</span>
+        {report?.simplified && <span className="ml-auto whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-normal text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易インボイス(レシート)と判定</span>}
       </div>
       {japaneseOff ? (
         <p className="text-xs text-slate-500">設定の「日本語レイアウト解析」がオフのため、チェックできません。</p>

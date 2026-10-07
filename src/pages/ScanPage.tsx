@@ -172,9 +172,9 @@ export default function ScanPage() {
       {loadError && <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">{loadError}</div>}
 
       {doc && (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
           {/* 左: 画像とオーバーレイ */}
-          <div className="space-y-3 lg:sticky lg:top-18 lg:self-start">
+          <div className="min-w-0 space-y-3 lg:sticky lg:top-18 lg:self-start">
             <div className="card p-3">
               <div className="mb-2 flex items-center gap-2 text-sm">
                 <span className="truncate font-medium">{doc.name}</span>
@@ -199,7 +199,7 @@ export default function ScanPage() {
           </div>
 
           {/* 右: 進捗・結果 */}
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <div className="card p-4">
               <div className="mb-3 flex items-center gap-2">
                 <span className="text-sm font-semibold">
