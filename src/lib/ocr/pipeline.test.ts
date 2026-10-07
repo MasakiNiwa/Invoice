@@ -5,6 +5,7 @@ describe('detail refinement', () => {
   it('scores requirement-related rows', () => {
     expect(detailRowScore('(税率10%対象 ¥40)', 10, -1)).toBeGreaterThanOrEqual(5)
     expect(detailRowScore('2024年12月23日', 10, -1)).toBeGreaterThanOrEqual(3)
+    expect(detailRowScore('請求:2026年101', 10, -1)).toBeGreaterThanOrEqual(3)
     expect(detailRowScore('株式会社サンプル 御中', 10, -1)).toBeGreaterThanOrEqual(3)
     expect(detailRowScore('いつもありがとうございます', 10, -1)).toBeLessThan(2)
   })

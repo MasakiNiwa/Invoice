@@ -15,7 +15,7 @@ import type { PdfTextItem } from '../pdf'
 import { normalizeRow, repairKeywords, type TextRow } from '../requirements'
 import { groupFullRows } from '../rows'
 import { binarize, connectedComponents, findTextLines, type TextLine } from '../textlines'
-import { extractTNumbers, toHalfWidth } from '../tnumber'
+import { extractTNumbers, isValidEan13, toHalfWidth } from '../tnumber'
 import type { Settings } from '../../store/settings'
 import { aggregate, isConfident, isPrimary, type Candidate, type Reading, type StageId, STAGE_LABEL } from './aggregate'
 import { AbortError, getPool, type OcrParams, type OcrResult, type OcrWord } from './pool'
@@ -137,7 +137,9 @@ export function detailRowScore(raw: string, index: number, regIdx: number): numb
   let s = 0
   if (/[¥]\s?[\d,]+|[\d,]{3,}\s?円/.test(n)) s += 3
   if (/(10|8)\s?%/.test(n)) s += 2
-  if (/\d{1,4}\s?[年/.\-]\s?\d{1,2}\s?[月/.\-]\s?\d{1,2}/.test(n)) s += 3
+  // 日付(「月」「日」を取りこぼした読み「2026年101」も拾えるよう、年の部分だけでも対象に)
+  if (/\d{1,4}\s?[年/.\-]\s?\d{1,2}\s?[月/.\-]\s?\d{1,2}/.test(n) || /(19|20)\d{2}\s?[年/.\-]/.test(n) || /(令和|R)\s?\d{1,2}\s?年/.test(n)) s += 3
+  if (/(請求日|発行日|取引日|日付|年月日|期限|納品日)/.test(n)) s += 2
   if (/(合計|小計|対象|消費税|税額|内税|外税|税込|税抜|請求金額|領収|但し|品名|摘要|明細|軽減|※)/.test(n)) s += 2
   if (/(御中|様|殿)/.test(n)) s += 3
   if (/(株式会社|有限会社|合同会社|\(株\)|㈱|店|事務所)/.test(n)) s += 2
@@ -278,7 +280,7 @@ export async function runScan(
   const contextRects: Rect[] = []
   const addReadings = (rs: Reading[]) => {
     if (rs.length === 0) return
-    for (const r of rs) r.context ||= r.stage === 'anchor' || contextRects.some((c) => overlapRatio(c, r.rect) > 0.5)
+    for (const r of rs) r.context ||= contextRects.some((c) => overlapRatio(c, r.rect) > 0.5)
     const before = new Set(candidates.filter((c) => c.valid).map((c) => c.digits))
     for (const r of rs) {
       readings.push(r)
@@ -488,11 +490,13 @@ export async function runScan(
   } else {
     emit({ type: 'stage', stage: 'anchor', status: 'start' })
     const anchorRects: Rect[] = []
-    const pushRoi = (rect: Rect, h: number, label: string) => {
+    const numberLines: { w: OcrWord; score: number; h: number }[] = []
+    /** context: 「登録番号」や T の近く(読めた番号を T番号の文脈ありとみなす) */
+    const pushRoi = (rect: Rect, h: number, label: string, context = true) => {
       const r = clampRect(rect, W, H)
       if (r.w < 4 || r.h < 4) return
       if (anchorRois.some((a) => iou(a.rect, r) > 0.75)) return
-      contextRects.push(r)
+      if (context) contextRects.push(r)
       const wide = clampRect({ x: r.x, y: r.y - h * 0.8, w: r.w, h: r.h + h * 1.6 }, W, H)
       const rcy = r.y + r.h / 2
       // 1) 連結成分で見つけた「文字が並ぶ行」が近くにあれば、その位置と文字高を採用(最も正確)
@@ -539,6 +543,21 @@ export async function runScan(
         anchorRects.push(w.rect)
         pushRoi({ x: w.rect.x - h * 0.8, y: cy - h * 1.1, w: h * 19, h: h * 2.2 }, h, `「${w.text.slice(0, 6)}」の右側`)
       })
+      // 数字の多い行(T が読めていなくても T番号の可能性がある行)。後で T番号らしさ順に絞る
+      for (const w of row.words) {
+        const t = toHalfWidth(w.text)
+        const digits = t.replace(/[^0-9]/g, '').length
+        if (digits < 10 || digits > 18) continue
+        let score = 0
+        if (/[TtＴ丁十]\s?[-:]?\s?\d/.test(t)) score += 3
+        if (/\d{1,4}[-\s]\d{4}[-\s]\d{4}/.test(t)) score += 1
+        if (digits >= 13 && digits <= 14) score += 1
+        if (/(商品|コード|JAN|品番|口座|電話|TEL|FAX|〒)/i.test(t)) score -= 3
+        // 日本の JAN コード(45/49 始まり・JAN の検査数字が正しい)は商品コードなので除外
+        const run13 = /(?<!\d)(4[59]\d{11})(?!\d)/.exec(t.replace(/[\s-]/g, ''))
+        if (run13 && isValidEan13(run13[1])) continue
+        numberLines.push({ w, score, h: wordCharH.get(w) || rowH })
+      }
       // キーワード(登録番号など)
       const compact = toHalfWidth(row.words.map((w) => w.text).join('')).replace(/\s/g, '')
       const m = KEYWORD_RE.exec(compact)
@@ -567,6 +586,12 @@ export async function runScan(
         pushRoi({ x: endX - h * 3, y: rowCy - h * 1.1, w: h * 26, h: h * 2.2 }, h, `「${m[0]}」の行`)
       }
     }
+    // 数字の多い行は、T番号らしい順に上位だけ精査対象へ(検出枠そのもの)
+    numberLines
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.ceil(plan.maxAnchorRois / 2))
+      .filter((n) => n.score >= 0)
+      .forEach((n) => pushRoi({ x: n.w.rect.x - n.h * 0.5, y: n.w.rect.y + n.w.rect.h / 2 - n.h * 1.1, w: n.w.rect.w + n.h, h: n.h * 2.2 }, n.h, '数字の多い行', n.score >= 3))
     emit({ type: 'marks', kind: 'anchor', rects: anchorRects })
     const rois = anchorRois.slice(0, plan.maxAnchorRois * 2)
     log('info', `アンカー ${anchorRects.length} 個 → 精査領域 ${rois.length} 個`, 'anchor')

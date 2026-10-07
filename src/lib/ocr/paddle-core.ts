@@ -136,8 +136,8 @@ export class PaddleCore {
       const order = boxes.map((b, i) => ({ b, i, r: b.w / Math.max(1, b.h) })).sort((a, b) => a.r - b.r)
       for (let i = 0; i < order.length; i += B) {
         const batch = order.slice(i, i + B).map((o) => o.b)
-        // 認識は検出枠より少し広めに切り出す(枠ぴったりだとカタカナ等の取りこぼしが多い)
-        const rs = await this.recBatch(bmp, batch.map((b) => padRect(b, boxes, img.width, img.height, params.recPadY ?? 0.3, params.recPadX ?? 0.5)))
+        // 余白(recPad)を指定すると検出枠より広めに切り出す(既定は枠そのまま。余白を変えた読み直しは記載事項精査で行う)
+        const rs = await this.recBatch(bmp, batch.map((b) => padRect(b, boxes, img.width, img.height, params.recPadY ?? 0, params.recPadX ?? 0)))
         rs.forEach((r, k) => {
           if (r.text.trim()) lines.push(toLine(r.text, r.conf, batch[k], r.symbols))
         })

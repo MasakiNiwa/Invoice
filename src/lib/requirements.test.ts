@@ -12,6 +12,11 @@ describe('requirements', () => {
     expect(normalizeRow('（内消费税等10%¥3）')).toBe('(内消費税等10%¥3)')
     expect(normalizeRow('税率10%对象')).toBe('税率10%対象')
   })
+  it('fixes % misread as 96', () => {
+    expect(normalizeRow('896对象小計 ¥2,000')).toBe('8%対象小計¥2,000')
+    expect(normalizeRow('8%6対象 ¥2,000')).toBe('8%対象¥2,000')
+    expect(normalizeRow('合計 ¥1,896')).toBe('合計¥1,896')
+  })
   it('fixes lookalikes in dates', () => {
     expect(normalizeRow('2O24年l2月23日')).toBe('2024年12月23日')
   })
