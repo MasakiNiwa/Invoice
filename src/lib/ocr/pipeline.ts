@@ -13,6 +13,7 @@ import type { Rect, Preprocess } from '../image'
 import { clampRect, cropForOcr, downscale, findTextBand, iou, rotateCanvas, otsuThreshold, overlapRatio, toGray } from '../image'
 import type { PdfTextItem } from '../pdf'
 import { normalizeRow, repairKeywords, type TextRow } from '../requirements'
+import { groupFullRows } from '../rows'
 import { binarize, connectedComponents, findTextLines, type TextLine } from '../textlines'
 import { extractTNumbers, toHalfWidth } from '../tnumber'
 import type { Settings } from '../../store/settings'
@@ -128,33 +129,6 @@ export function groupWordsIntoRows(words: OcrWord[]): Row[] {
     else rows.push({ words: [w] })
   }
   return rows.map((r) => ({ words: r.words, rect: unionRect(r.words.map((w) => w.rect)), text: r.words.map((w) => w.text).join(' ') }))
-}
-
-/**
- * 記載事項チェック用: y が重なる単語を、間隔に関係なく1行にまとめる
- * (レシートの「税率10%対象 ……… ¥40」のように左右に離れた項目と金額を同じ行にする)
- */
-export function groupFullRows<T extends { text: string; rect: Rect; conf?: number }>(items: T[]): TextRow[] {
-  const sorted = items.filter((w) => w.text.trim() && w.rect.h > 0).sort((a, b) => a.rect.y + a.rect.h / 2 - (b.rect.y + b.rect.h / 2))
-  const rows: T[][] = []
-  for (const w of sorted) {
-    const cy = w.rect.y + w.rect.h / 2
-    const row = rows[rows.length - 1]
-    if (row) {
-      const hs = row.map((x) => x.rect.h)
-      const h = median(hs)
-      const rcy = median(row.map((x) => x.rect.y + x.rect.h / 2))
-      if (Math.abs(cy - rcy) < Math.max(h, w.rect.h) * 0.45) {
-        row.push(w)
-        continue
-      }
-    }
-    rows.push([w])
-  }
-  return rows.map((r) => {
-    r.sort((a, b) => a.rect.x - b.rect.x)
-    return { text: r.map((w) => w.text).join(' '), rect: unionRect(r.map((w) => w.rect)), parts: r.map((w) => ({ text: w.text, rect: w.rect, conf: w.conf })) }
-  })
 }
 
 /** 記載事項精査の対象として、その行がどれだけ有望か(2以上で対象) */
@@ -316,7 +290,10 @@ export async function runScan(
       if (isPrimary(c) && !before.has(c.digits)) log('success', `検算OKの候補を発見: T${c.digits}`, rs[0].stage)
     }
   }
-  const confident = () => settings.earlyExit && isConfident(candidates)
+  /** ページ内の「登録番号」の数(1枚に複数のインボイスがあるとき、その数だけ番号を見つけるまで続ける) */
+  let expectedNumbers = 1
+  const confident = () =>
+    settings.earlyExit && isConfident(candidates) && new Set(candidates.filter(isPrimary).map((c) => c.digits)).size >= expectedNumbers
 
   // ---------- モデル準備 ----------
   emit({ type: 'progress', value: 0.01, label: 'OCRモデル準備' })
@@ -465,10 +442,14 @@ export async function runScan(
       const sh = w.symbols.map((sy) => sy.rect.h).filter((h) => h > 0)
       const maxH = Math.max(0, ...sh)
       const ch = median(sh.filter((h) => h > maxH * 0.45)) / s
-      return { ...w, rect: map(w.rect), symbols: w.symbols.map((sy) => ({ ...sy, rect: map(sy.rect) })), ch: ch > 0 ? Math.min(ch, w.rect.h / s) : w.rect.h / s }
+      // PaddleOCR の枠は検出時に上下へ広げてある(unclip)ので、文字の高さは枠の約6割
+      const boxH = (w.rect.h / s) * (engine === 'paddle' ? 0.62 : 1)
+      return { ...w, rect: map(w.rect), symbols: w.symbols.map((sy) => ({ ...sy, rect: map(sy.rect) })), ch: ch > 0 && engine !== 'paddle' ? Math.min(ch, boxH) : boxH }
     })
     for (const w of words) wordCharH.set(w, w.ch)
     layoutRows = groupWordsIntoRows(words)
+    expectedNumbers = Math.max(1, Math.min(8, words.filter((w) => /登録番号|登録No|登録NO/.test(repairKeywords(normalizeRow(w.text)))).length))
+    if (expectedNumbers > 1) log('info', `「登録番号」が ${expectedNumbers} か所あります(複数のインボイス)。すべて見つかるまで捜査します`, 'layout')
     emit({ type: 'marks', kind: 'word', rects: words.map((w) => w.rect) })
     if (!input.pdfTextItems || input.pdfTextItems.length <= 5) {
       fullRows = groupFullRows(words)
@@ -515,9 +496,11 @@ export async function runScan(
       const wide = clampRect({ x: r.x, y: r.y - h * 0.8, w: r.w, h: r.h + h * 1.6 }, W, H)
       const rcy = r.y + r.h / 2
       // 1) 連結成分で見つけた「文字が並ぶ行」が近くにあれば、その位置と文字高を採用(最も正確)
+      // 横に並んだ別のインボイスの行を拾わないよう、領域の左端(キーワードの直後)に近い行を優先
+      const xDist = (l: { x: number; w: number }) => (l.x <= r.x && l.x + l.w >= r.x ? 0 : Math.abs(l.x - r.x))
       const line = detectCcLines()
-        .lines.filter((l) => Math.abs(l.y + l.h / 2 - rcy) < h * 0.9 && l.x + l.w > r.x && l.x < r.x + r.w)
-        .sort((a, b) => Math.abs(a.y + a.h / 2 - rcy) - Math.abs(b.y + b.h / 2 - rcy))[0]
+        .lines.filter((l) => Math.abs(l.y + l.h / 2 - rcy) < h * 0.9 && l.x + l.w > r.x && l.x < r.x + r.w && xDist(l) < h * 6)
+        .sort((a, b) => Math.abs(a.y + a.h / 2 - rcy) / h + xDist(a) / (h * 2) - (Math.abs(b.y + b.h / 2 - rcy) / h + xDist(b) / (h * 2)))[0]
       // 2) なければ水平投影で文字の帯を探す
       const band = line ? null : findTextBand(src, wide, rcy)
       if (line) {
@@ -588,14 +571,18 @@ export async function runScan(
     const rois = anchorRois.slice(0, plan.maxAnchorRois * 2)
     log('info', `アンカー ${anchorRects.length} 個 → 精査領域 ${rois.length} 個`, 'anchor')
     // 1行モード(psm7)。倍率と前処理を変えて複数回読み、投票する
-    const jobs = rois.flatMap((roi) =>
+    // PaddleOCR: 横に引き伸ばした読みも加える(同じ数字の連続を取りこぼしにくい)
+    const stretchJobs = engine === 'paddle'
+      ? rois.filter((r) => !r.multi).map((roi) => () => readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, 48 / roi.h)), 'contrast', { psm: '7', recStretch: 1.8 }, 'anchor', `${roi.label}(横に拡大)`))
+      : []
+    const jobs = [...stretchJobs, ...rois.flatMap((roi) =>
       roi.multi
         ? [() => readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, plan.targetHeights[0] / roi.h)), 'contrast', { psm: '6', whitelist: DIGIT_WHITELIST }, 'anchor', roi.label)]
         : plan.targetHeights.flatMap((th) =>
         plan.variants.map((v) => () =>
           readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, th / roi.h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'anchor', roi.label)),
       ),
-    )
+    )]
     await runAll('anchor', jobs)
     emit({ type: 'stage', stage: 'anchor', status: 'done' })
   }
@@ -616,7 +603,7 @@ export async function runScan(
       plan.variants.slice(0, 2).map((v) => () => {
         const h = l.charHeight
         const rect = { x: l.x - h * 1.5, y: l.y - h * 0.5, w: l.w + h * 2.5, h: l.h + h }
-        return readCrop(digitPool, rect, Math.max(0.5, Math.min(6, 52 / h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'textline', `${l.count}文字の並び`)
+        return readCrop(digitPool, rect, Math.max(0.5, Math.min(6, 52 / h)), v, { psm: '7', whitelist: DIGIT_WHITELIST, recStretch: engine === 'paddle' && v !== plan.variants[0] ? 1.8 : 1 }, 'textline', `${l.count}文字の並び`)
       }),
     )
     await runAll('textline', jobs)

@@ -143,7 +143,8 @@ export function useScan() {
     flush()
   }, [flush])
 
-  const start = useCallback(async (input: ScanInput) => {
+  /** スキャンを実行し、終了時の状態を返す(中止・エラー時もその状態を返す) */
+  const start = useCallback(async (input: ScanInput): Promise<ScanState | null> => {
     abortRef.current?.abort()
     const ac = new AbortController()
     abortRef.current = ac
@@ -153,10 +154,10 @@ export function useScan() {
     try {
       const settings = pickSettings(useSettings.getState())
       const candidates = await runScan(input, settings, onEvent, ac.signal)
-      if (abortRef.current !== ac) return
+      if (abortRef.current !== ac) return null
       stateRef.current = { ...stateRef.current, status: 'done', candidates, focus: [], finishedAt: performance.now() }
     } catch (err) {
-      if (abortRef.current !== ac) return
+      if (abortRef.current !== ac) return null
       const aborted = err instanceof AbortError || ac.signal.aborted
       stateRef.current = {
         ...stateRef.current,
@@ -168,6 +169,7 @@ export function useScan() {
       if (!aborted) console.error(err)
     }
     flush()
+    return stateRef.current
   }, [flush, onEvent])
 
   const abort = useCallback(() => {

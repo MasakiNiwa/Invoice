@@ -19,6 +19,8 @@ const SUMMARY_BG: Record<CheckStatus, string> = {
 
 interface Props {
   report: RequirementReport | null
+  /** 複数インボイスのときの見出し(例: インボイス 2) */
+  title?: string
   scanning: boolean
   japaneseOff: boolean
   rows?: TextRow[]
@@ -28,11 +30,11 @@ interface Props {
 }
 
 /** 適格請求書の記載事項チェック(目安) */
-export function RequirementsPanel({ report, scanning, japaneseOff, rows, refined, onHover }: Props) {
+export function RequirementsPanel({ report, title, scanning, japaneseOff, rows, refined, onHover }: Props) {
   return (
     <div className="card p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
-        <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック
+        <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック{title && <span className="text-indigo-600 dark:text-indigo-300">({title})</span>}
         <span className="whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500 dark:bg-slate-800">目安</span>
         {!!refined && <span className="whitespace-nowrap rounded-full bg-pink-100 px-2 py-0.5 text-[10px] font-normal text-pink-700 dark:bg-pink-900/50 dark:text-pink-300">{refined}行を精査済み</span>}
         {report?.simplified && <span className="ml-auto whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-normal text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易インボイス(レシート)と判定</span>}

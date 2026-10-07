@@ -20,6 +20,8 @@ interface Props {
   highlightRects?: Rect[] | null
   /** 画像の上に重ねる表示(準備中・進捗など) */
   overlay?: ReactNode
+  /** 1枚に複数のインボイスがあるときの領域 */
+  segments?: { rect: Rect; label: string; active: boolean }[]
 }
 
 const MAX_DISPLAY = 1600
@@ -28,7 +30,7 @@ const MAX_DISPLAY = 1600
  * 画像 + 捜査オーバーレイ。
  * 背景(画像)と前景(オーバーレイ)の2枚のキャンバスを重ね、前景だけ毎フレーム描き直す。
  */
-export function ScanViewer({ image, state, highlight, highlightRects, overlay }: Props) {
+export function ScanViewer({ image, state, highlight, highlightRects, overlay, segments }: Props) {
   const baseRef = useRef<HTMLCanvasElement>(null)
   const overRef = useRef<HTMLCanvasElement>(null)
   const stateRef = useRef(state)
@@ -37,6 +39,8 @@ export function ScanViewer({ image, state, highlight, highlightRects, overlay }:
   hlRef.current = highlight
   const hlRectsRef = useRef(highlightRects)
   hlRectsRef.current = highlightRects
+  const segRef = useRef(segments)
+  segRef.current = segments
 
   const scale = Math.min(1, MAX_DISPLAY / Math.max(image.width, image.height))
   const dw = Math.round(image.width * scale)
@@ -147,6 +151,26 @@ export function ScanViewer({ image, state, highlight, highlightRects, overlay }:
       // 検算NGは、結果一覧でカーソルを合わせたときだけ表示(誤読候補で画面が騒がしくならないように)
       for (const c of invalid) if (hlRef.current === c.digits) drawCand(c.digits, c.rects.slice(0, 2), false, true)
       for (const c of top) drawCand(c.digits, c.rects.slice(0, 3), true, hlRef.current === c.digits || (!hlRef.current && c === top[0] && !scanning))
+
+      // インボイスごとの領域
+      const segs = segRef.current
+      if (segs && segs.length > 1) {
+        ctx.font = `bold ${Math.max(13, dw / 50)}px sans-serif`
+        for (const sg of segs) {
+          const [x, y, w, h] = R(sg.rect)
+          const m = lw * 5
+          ctx.setLineDash(sg.active ? [] : [lw * 5, lw * 3])
+          ctx.lineWidth = sg.active ? lw * 2.5 : lw * 1.5
+          ctx.strokeStyle = sg.active ? '#4f46e5' : 'rgba(79,70,229,0.55)'
+          ctx.strokeRect(x - m, y - m, w + m * 2, h + m * 2)
+          ctx.setLineDash([])
+          const tw = ctx.measureText(sg.label).width + 12
+          ctx.fillStyle = sg.active ? '#4f46e5' : 'rgba(79,70,229,0.7)'
+          ctx.fillRect(x - m, y - m, tw, Math.max(18, dw / 40))
+          ctx.fillStyle = '#fff'
+          ctx.fillText(sg.label, x - m + 6, y - m + Math.max(14, dw / 52))
+        }
+      }
 
       // 記載事項の強調
       const hr = hlRectsRef.current

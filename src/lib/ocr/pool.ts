@@ -20,6 +20,8 @@ export interface OcrParams {
   /** PaddleOCR: 検出枠を広げて認識する余白(行の高さに対する比率) */
   recPadY?: number
   recPadX?: number
+  /** PaddleOCR: 認識前に横方向へ引き伸ばす倍率(同じ数字が続く「1111」「0000」の取りこぼし対策) */
+  recStretch?: number
 }
 
 interface Slot {

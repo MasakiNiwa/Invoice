@@ -118,7 +118,7 @@ const FUZZY_KEYWORDS = [
 ]
 /** 正しい字 → OCR が出しがちな字(簡体字・形の似た字) */
 const CONFUSABLE: Record<string, string> = {
-  費: '貿賀费責貴', 税: '稅祝悦説', 書: '害善晝畫', 番: '督香畨審', 録: '緑碌錄', 領: '頜鎖', 収: '收', 額: '頟客', 対: '对討',
+  費: '貿賀费責貴', 税: '稅祝悦説', 書: '害善晝畫', 番: '督香畨審备畓', 録: '緑碌錄', 領: '頜鎖', 収: '收', 額: '頟客', 対: '对討',
   象: '像', 計: '訃討', 込: '迄', 請: '清諸靖', 求: '來', 号: '弓', 登: '澄', 消: '清', 金: '全', 合: '含', 証: '正', 納: '約',
   品: '晶', 軽: '経', 減: '滅减', 率: '卒', 適: '摘', 格: '恪', 抜: '扱', 但: '伹',
 }
@@ -232,13 +232,13 @@ export function extractTaxBreakdown(lines: string[]): TaxBreakdown | null {
   }
   return { lines: res, total, totalOk }
 }
-const ISSUER_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|医療法人|社会福祉法人|学校法人|\(株\)|\(有\)|㈱|㈲|事務所|商店|商事|店$|店\b|本店|支店|[^\s]店)/
+const ISSUER_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|医療法人|社会福祉法人|学校法人|\(株\)|\(有\)|㈱|㈲|事務所|商店|商事|店$|店\b|本店|支店|[^\s]店|食堂|[^\s]堂$|[^\s]屋$|亭|カフェ|クリニック|医院|病院|薬局|ホテル|旅館|工業|工房|製作所)/
 const RECIPIENT_RE = /(御中|様|殿)(?!式)/
 const RECEIPT_RE = /(領収書|領収証|レシート|お買上|お買い上げ|ご来店|お預り|お預かり|お釣|釣銭|POS|レジ|nanaco|Suica|PayPay|現金|クレジット)/i
 const RATE_RE = /(10|8)\s?%/
 const REDUCED_MARK_RE = /(軽減|※|\*|★|☆|#)/
 const TAX_RE = /(消費税|内税|外税|税額|税等|内消費税|うち税|税\s?¥)/
-const TOTAL_RE = /(対象|合計|小計|計|税込|税抜|お買上)/
+const TOTAL_RE = /(対象|合計|小計|総計|税込|税抜|お買上)/
 const CONTENT_RE = /(品名|品目|内容|摘要|明細|但し|但|商品|項目|として|代|料|費)/
 
 function rowsMatching(rows: { n: string; r: TextRow }[], re: RegExp) {
@@ -299,7 +299,9 @@ export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | nu
   const content = rowsMatching(rows, CONTENT_RE).filter((x) => !TAX_RE.test(x.n))
   const amountRows = rows.filter((x) => parseAmounts(x.n).length > 0 && !TAX_RE.test(x.n) && !TOTAL_RE.test(x.n))
   const has8 = rows.some((x) => /8\s?%/.test(x.n))
-  const reducedMarked = rows.some((x) => /軽減/.test(x.n) || (/8\s?%/.test(x.n) && REDUCED_MARK_RE.test(x.n)))
+  // 軽減税率の旨: 「軽減」の記載、8% の行の印、または品目に ※★ 等の印(8% の行と合わせて「※は軽減税率対象」を示す慣行)
+  const reducedMarked = rows.some((x) => /軽減/.test(x.n) || (/8\s?%/.test(x.n) && REDUCED_MARK_RE.test(x.n))) ||
+    (has8 && rows.some((x) => /^[※★☆*]|[※★☆]/.test(x.n) && parseAmounts(x.n).length > 0))
   const contentFound = content.length > 0 || amountRows.length > 0
   items.push({
     id: 'content',

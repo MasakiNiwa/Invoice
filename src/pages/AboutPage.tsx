@@ -1,4 +1,5 @@
-import { ExternalLink, Scale } from 'lucide-react'
+import { Download, ExternalLink, Scale, Smartphone } from 'lucide-react'
+import { useInstallPrompt } from '../hooks/useInstallPrompt'
 import { GithubIcon as Github } from '../components/GithubIcon'
 import { PAGES_URL, REPO_URL } from '../lib/links'
 
@@ -17,6 +18,7 @@ const LIBS: [string, string, string][] = [
 
 export default function AboutPage() {
   const buildDate = new Date(__BUILD_DATE__)
+  const pwa = useInstallPrompt()
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <h1 className="text-xl font-bold">このアプリについて</h1>
@@ -42,6 +44,23 @@ export default function AboutPage() {
           <a className="btn-ghost" href={`${REPO_URL}/issues`} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 不具合・要望</a>
         </div>
         <p className="text-xs text-slate-400">公開URL: <a className="underline" href={PAGES_URL}>{PAGES_URL}</a></p>
+      </section>
+
+      <section className="card p-5 text-sm">
+        <h2 className="mb-2 flex items-center gap-2 font-bold"><Smartphone size={16} /> アプリとして使う</h2>
+        {pwa.installed ? (
+          <p className="text-slate-600 dark:text-slate-300">ホーム画面に追加済みです。オフラインでも使えます(OCRモデルは一度使うと端末に保存されます)。</p>
+        ) : pwa.canInstall ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <button className="btn-primary" onClick={() => void pwa.install()}><Download size={16} /> ホーム画面に追加</button>
+            <span className="text-xs text-slate-500">アプリのように起動でき、オフラインでも使えます</span>
+          </div>
+        ) : (
+          <p className="text-slate-600 dark:text-slate-300">
+            {pwa.isIos ? 'Safari の共有ボタン(□↑)→「ホーム画面に追加」で、アプリのように使えます。' : 'ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」で、アプリのように使えます。'}
+            オフラインでも動作します(OCRモデルは一度使うと端末に保存されます)。
+          </p>
+        )}
       </section>
 
       <section className="card p-5 text-sm">

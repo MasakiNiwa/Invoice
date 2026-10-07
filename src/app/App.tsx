@@ -1,6 +1,7 @@
 import { HashRouter, Route, Routes } from 'react-router'
 import { BottomBar, TopBar } from './NavBar'
 import { useTheme } from './useTheme'
+import { UpdateToast } from '../components/UpdateToast'
 import ScanPage from '../pages/ScanPage'
 import SettingsPage from '../pages/SettingsPage'
 import HelpPage from '../pages/HelpPage'
@@ -23,6 +24,7 @@ export default function App() {
         </Routes>
       </main>
       <BottomBar />
+      <UpdateToast />
     </HashRouter>
   )
 }

@@ -1,7 +1,7 @@
 {
   "name": "invoice-checker",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "インボイス確認ツール - 適格請求書発行事業者の登録番号(T番号)を読み取り・検算する",
   "license": "MIT",
@@ -37,6 +37,7 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.3",
     "vite-plugin-pwa": "^2.0.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "workbox-window": "^7.4.1"
   }
 }
