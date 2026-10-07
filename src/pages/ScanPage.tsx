@@ -263,6 +263,11 @@ export default function ScanPage() {
   const valid = cands.filter(isPrimary).slice(0, Math.max(3, invoices.length))
   const invalid = cands.filter((c) => !valid.includes(c)).slice(0, 6)
   const headerBest = (inv?.digits && valid.find((c) => c.digits === inv.digits)) || valid[0] || null
+  // 選んでいるインボイスの番号を先頭に
+  if (headerBest && valid[0] !== headerBest) {
+    valid.splice(valid.indexOf(headerBest), 1)
+    valid.unshift(headerBest)
+  }
   const report = inv?.report ?? null
 
   // ヘッダーの「公表サイト」ボタン用に最有力候補を共有
