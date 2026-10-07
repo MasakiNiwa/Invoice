@@ -22,5 +22,14 @@ describe('textlines', () => {
     expect(lines.length).toBe(1)
     expect(lines[0].count).toBe(14)
     expect(lines[0].score).toBeGreaterThan(0.8)
+    expect(lines[0].segments.length).toBe(1)
+  })
+  it('splits segments at wide gaps', () => {
+    const boxes: [number, number, number, number][] = []
+    for (let i = 0; i < 4; i++) boxes.push([10 + i * 14, 20, 12, 16])
+    for (let i = 0; i < 14; i++) boxes.push([100 + i * 12, 20, 9, 16])
+    const bin = drawBoxes(300, 60, boxes)
+    const lines = findTextLines(connectedComponents(bin, 300, 60), { minChars: 8 })
+    expect(lines[0].segments.map((s) => s.count)).toEqual([4, 14])
   })
 })

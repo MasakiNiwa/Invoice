@@ -18,6 +18,8 @@ export interface TextLine extends Rect {
   charHeight: number
   /** T番号らしさ(0..1) */
   score: number
+  /** 文字間の大きな隙間(文字高の0.8倍超)で区切った部分。「登録番号  T1234…」の番号部分だけを取り出すのに使う */
+  segments: { x: number; w: number; count: number }[]
 }
 
 /** 二値画像(1=黒)から連結成分(8近傍)を抽出。union-find。 */
@@ -116,7 +118,7 @@ export function findTextLines(components: Component[], opts: LineOptions = {}): 
       const c = cs[j]
       const avgH = sumH / chain.length
       const gap = c.x - (last.x + last.w)
-      if (gap > avgH * 1.8) {
+      if (gap > avgH * 3) {
         // x ソートなので、これ以上離れたものは全部遠い可能性が高いが、別の行の成分が挟まるので継続判定
         if (c.x - (last.x + last.w) > avgH * 6) break
         continue
@@ -152,12 +154,22 @@ export function findTextLines(components: Component[], opts: LineOptions = {}): 
     }
     hs.sort((a, b) => a - b)
     const charHeight = hs[Math.floor(hs.length / 2)]
+    const segments: TextLine['segments'] = []
+    let segStart = 0
+    for (let k = 1; k <= chain.length; k++) {
+      const brk = k === chain.length || gaps[k - 1] > charHeight * 0.8
+      if (!brk) continue
+      const a = cs[chain[segStart]]
+      const b = cs[chain[k - 1]]
+      segments.push({ x: a.x, w: b.x + b.w - a.x, count: k - segStart })
+      segStart = k
+    }
     // 高さの揃い具合と個数の T番号らしさ
     const hVar = hs.reduce((s, v) => s + Math.abs(v - charHeight), 0) / hs.length / charHeight
     const n = chain.length
     const countScore = n >= 13 && n <= 20 ? 1 : n > maxChars ? 0.2 : 0.6
     const score = Math.max(0, Math.min(1, countScore * (1 - hVar * 1.5)))
-    lines.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, count: n, charHeight, score })
+    lines.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, count: n, charHeight, score, segments })
   }
   return lines.sort((a, b) => b.score - a.score)
 }

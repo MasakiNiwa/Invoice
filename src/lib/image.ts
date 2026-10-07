@@ -7,7 +7,7 @@ export interface Rect {
   h: number
 }
 
-export type Preprocess = 'gray' | 'binary' | 'binaryInv' | 'contrast'
+export type Preprocess = 'gray' | 'binary' | 'binaryInv' | 'contrast' | 'adaptive'
 
 export function createCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas')
@@ -144,6 +144,34 @@ export function cropForOcr(src: HTMLCanvasElement, rect: Rect, scale: number, mo
       d[i] = d[i + 1] = d[i + 2] = v
       d[i + 3] = 255
     }
+  } else if (mode === 'adaptive') {
+    // 局所平均との比較による適応的二値化(写真の明暗ムラ・影に強い)。積分画像で高速化
+    const win = Math.max(15, Math.round(Math.min(w, h) * 0.8)) | 1
+    const half = win >> 1
+    const integ = new Float64Array((w + 1) * (h + 1))
+    for (let y = 0; y < h; y++) {
+      let row = 0
+      for (let x = 0; x < w; x++) {
+        row += gray[y * w + x]
+        integ[(y + 1) * (w + 1) + x + 1] = integ[y * (w + 1) + x + 1] + row
+      }
+    }
+    const dark = isMostlyDark(gray)
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - half)
+      const y1 = Math.min(h, y + half + 1)
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - half)
+        const x1 = Math.min(w, x + half + 1)
+        const sum = integ[y1 * (w + 1) + x1] - integ[y0 * (w + 1) + x1] - integ[y1 * (w + 1) + x0] + integ[y0 * (w + 1) + x0]
+        const mean = sum / ((x1 - x0) * (y1 - y0))
+        const v0 = gray[y * w + x]
+        const ink = dark ? v0 > mean * 1.12 : v0 < mean * 0.88
+        const i = (y * w + x) * 4
+        d[i] = d[i + 1] = d[i + 2] = ink ? 0 : 255
+        d[i + 3] = 255
+      }
+    }
   } else {
     const t = otsuThreshold(gray)
     if (mode === 'binary' && isMostlyDark(gray)) invert = true
@@ -184,4 +212,47 @@ export function overlapRatio(a: Rect, b: Rect): number {
   const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1)
   const m = Math.min(a.w * a.h, b.w * b.h)
   return m > 0 ? inter / m : 0
+}
+
+/**
+ * rect 内の水平投影(行ごとの黒画素量)から、centerY を含む「文字の帯」を探す。
+ * アンカー周辺の切り出しが上下の行を含んでしまうのを防ぐ。見つからなければ null。
+ */
+export function findTextBand(src: HTMLCanvasElement, rect: Rect, centerY: number): { y: number; h: number } | null {
+  const r = clampRect(rect, src.width, src.height)
+  const scale = Math.min(1, 600 / r.w)
+  const w = Math.max(1, Math.round(r.w * scale))
+  const h = Math.max(1, Math.round(r.h * scale))
+  const c = createCanvas(w, h)
+  const ctx = ctx2d(c)
+  ctx.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, w, h)
+  const gray = toGray(c)
+  const t = otsuThreshold(gray)
+  const dark = isMostlyDark(gray)
+  const prof = new Float32Array(h)
+  for (let y = 0; y < h; y++) {
+    let n = 0
+    for (let x = 0; x < w; x++) {
+      const v = gray[y * w + x]
+      if (dark ? v > t : v < t) n++
+    }
+    prof[y] = n / w
+  }
+  const thr = Math.max(0.015, Math.max(...prof) * 0.08)
+  let cy = Math.round((centerY - r.y) * scale)
+  cy = Math.max(0, Math.min(h - 1, cy))
+  // centerY 付近で最もインクの多い行から帯を広げる
+  let seed = -1
+  for (let d = 0; d < h * 0.25 && seed < 0; d++) {
+    if (cy - d >= 0 && prof[cy - d] > thr) seed = cy - d
+    else if (cy + d < h && prof[cy + d] > thr) seed = cy + d
+  }
+  if (seed < 0) return null
+  let y0 = seed
+  let y1 = seed
+  while (y0 > 0 && prof[y0 - 1] > thr) y0--
+  while (y1 < h - 1 && prof[y1 + 1] > thr) y1++
+  const bandH = (y1 - y0 + 1) / scale
+  if (bandH < 4) return null
+  return { y: r.y + y0 / scale, h: bandH }
 }

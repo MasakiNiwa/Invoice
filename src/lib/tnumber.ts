@@ -131,13 +131,18 @@ export function extractTNumbers(text: string): ExtractedNumber[] {
     }
 
     let read = tryRead(j)
-    if (!hasT && c === '7') {
-      // "7" を T とみなして残り13桁を読めるか
+    if (!hasT && (c === '7' || c === '1' || c === 'I' || c === 'l' || c === '|')) {
+      // "7"/"1" + 13桁(計14桁)なら、先頭は T の誤読とみなす(T の横棒が欠けると 1、斜めに読むと 7 になりやすい)
       const alt = tryRead(i + 1)
       if (alt.digits.length === 13 && read.digits.length !== 13) {
         hasT = true
-        read = alt
+        read = { ...alt, subs: alt.subs + (c === '7' ? 0 : 1) }
       }
+    }
+    if (hasT && read.digits.length === 14 && (read.digits[0] === '1' || read.digits[0] === '7')) {
+      // "T" 1文字が "T1"/"T7" と二重に読まれたケース: 先頭の 1/7 を捨てる
+      const alt = tryRead(j + 1)
+      if (alt.digits.length === 13 && isValidDigits(alt.digits)) read = { ...alt, subs: alt.subs + 1 }
     }
     if (read.digits.length !== 13) continue
     if (read.subs > 3) continue

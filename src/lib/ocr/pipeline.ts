@@ -10,9 +10,10 @@
  * UI はイベント(ScanEvent)を受け取って可視化する。
  */
 import type { Rect, Preprocess } from '../image'
-import { clampRect, cropForOcr, downscale, otsuThreshold, overlapRatio, toGray } from '../image'
+import { clampRect, cropForOcr, downscale, findTextBand, iou, otsuThreshold, overlapRatio, toGray } from '../image'
 import type { PdfTextItem } from '../pdf'
-import { binarize, connectedComponents, findTextLines } from '../textlines'
+import type { TextRow } from '../requirements'
+import { binarize, connectedComponents, findTextLines, type TextLine } from '../textlines'
 import { extractTNumbers, toHalfWidth } from '../tnumber'
 import type { Settings } from '../../store/settings'
 import { aggregate, isConfident, isPrimary, type Candidate, type Reading, type StageId, STAGE_LABEL } from './aggregate'
@@ -32,6 +33,7 @@ export type ScanEvent =
   | { type: 'progress'; value: number; label: string }
   | { type: 'log'; level: LogLevel; message: string; stage?: StageId }
   | { type: 'model'; status: string; progress: number }
+  | { type: 'textrows'; source: 'pdf' | 'ocr'; rows: TextRow[] }
 
 export interface ScanInput {
   canvas: HTMLCanvasElement
@@ -44,6 +46,8 @@ const DIGIT_WHITELIST = 'T0123456789-'
 const KEYWORD_RE = /(登録番号|登録No|登録NO|登録N0|適格請求書|インボイス|事業者番号|登録)/
 
 interface Plan {
+  /** 全体レイアウト解析の最大辺(大きいほど小さい文字に強いが遅い) */
+  layoutMaxSide: number
   maxAnchorRois: number
   targetHeights: number[]
   variants: Preprocess[]
@@ -53,9 +57,9 @@ interface Plan {
 }
 
 const PLANS: Record<Settings['strength'], Plan> = {
-  quick: { maxAnchorRois: 6, targetHeights: [40], variants: ['contrast'], maxTextlines: 6, tileLevels: [], tileVariants: ['contrast'] },
-  standard: { maxAnchorRois: 12, targetHeights: [34, 48], variants: ['contrast', 'binary'], maxTextlines: 12, tileLevels: [2, 3], tileVariants: ['contrast'] },
-  thorough: { maxAnchorRois: 24, targetHeights: [28, 40, 56], variants: ['contrast', 'binary', 'gray'], maxTextlines: 30, tileLevels: [2, 3, 4], tileVariants: ['contrast', 'binary'] },
+  quick: { layoutMaxSide: 2000, maxAnchorRois: 6, targetHeights: [52], variants: ['contrast'], maxTextlines: 6, tileLevels: [], tileVariants: ['contrast'] },
+  standard: { layoutMaxSide: 2800, maxAnchorRois: 12, targetHeights: [48, 64], variants: ['contrast', 'adaptive'], maxTextlines: 12, tileLevels: [2, 3], tileVariants: ['contrast'] },
+  thorough: { layoutMaxSide: 3600, maxAnchorRois: 24, targetHeights: [36, 52, 72], variants: ['contrast', 'adaptive', 'binary'], maxTextlines: 30, tileLevels: [2, 3, 4], tileVariants: ['contrast', 'adaptive'] },
 }
 
 const STAGE_SPAN: Record<StageId, [number, number]> = {
@@ -99,6 +103,33 @@ export function groupWordsIntoRows(words: OcrWord[]): Row[] {
     else rows.push({ words: [w] })
   }
   return rows.map((r) => ({ words: r.words, rect: unionRect(r.words.map((w) => w.rect)), text: r.words.map((w) => w.text).join(' ') }))
+}
+
+/**
+ * 記載事項チェック用: y が重なる単語を、間隔に関係なく1行にまとめる
+ * (レシートの「税率10%対象 ……… ¥40」のように左右に離れた項目と金額を同じ行にする)
+ */
+export function groupFullRows<T extends { text: string; rect: Rect }>(items: T[]): TextRow[] {
+  const sorted = items.filter((w) => w.text.trim() && w.rect.h > 0).sort((a, b) => a.rect.y + a.rect.h / 2 - (b.rect.y + b.rect.h / 2))
+  const rows: T[][] = []
+  for (const w of sorted) {
+    const cy = w.rect.y + w.rect.h / 2
+    const row = rows[rows.length - 1]
+    if (row) {
+      const hs = row.map((x) => x.rect.h)
+      const h = median(hs)
+      const rcy = median(row.map((x) => x.rect.y + x.rect.h / 2))
+      if (Math.abs(cy - rcy) < Math.max(h, w.rect.h) * 0.45) {
+        row.push(w)
+        continue
+      }
+    }
+    rows.push([w])
+  }
+  return rows.map((r) => {
+    r.sort((a, b) => a.rect.x - b.rect.x)
+    return { text: r.map((w) => w.text).join(' '), rect: unionRect(r.map((w) => w.rect)) }
+  })
 }
 
 /** OCR 結果から T番号の読み取りを作る。mapRect で元画像座標へ変換。 */
@@ -253,6 +284,7 @@ export async function runScan(
         found.push({ digits: m.digits, hasT: m.hasT, valid: m.valid, conf: 99, stage: 'pdf', rect: unionRect(hit.map((h) => h.it.rect)), substitutions: m.substitutions, raw: m.raw, detail: 'テキスト層' })
       }
     }
+    if (items.length > 5) emit({ type: 'textrows', source: 'pdf', rows: groupFullRows(items.map((it) => ({ text: it.str, rect: it.rect }))) })
     log(found.length ? 'success' : 'info', found.length ? `PDFのテキスト層から ${found.length} 件抽出` : `PDFテキスト層(${items.length}要素)にT番号は見当たりません`, 'pdf')
     addReadings(found)
     emit({ type: 'stage', stage: 'pdf', status: 'done' })
@@ -262,32 +294,62 @@ export async function runScan(
   // ---------- Stage 1: 全体レイアウト解析 ----------
   check()
   let layoutRows: Row[] = []
+  /** 単語ごとの文字高(シンボル基準) */
+  const wordCharH = new Map<OcrWord, number>()
   let charH = 0
   if (confident()) {
     emit({ type: 'stage', stage: 'layout', status: 'skip', note: 'テキスト層で確定' })
   } else {
     emit({ type: 'stage', stage: 'layout', status: 'start' })
-    const { canvas: small, scale: s } = downscale(src, 3600)
-    log('info', `全体を ${small.width}×${small.height}px でレイアウト解析`, 'layout')
+    // 大きい画像は縮小、小さい画像(スクショ等)は拡大して、日本語の文字が読める大きさにする
+    const long = Math.max(W, H)
+    const s = Math.min(plan.layoutMaxSide / long, Math.max(1, Math.min(2.5, 2400 / long)))
+    log('info', `全体を ${Math.round(W * s)}×${Math.round(H * s)}px でレイアウト解析`, 'layout')
     progress('layout', 0)
     layoutPool.onRecognizeProgress = (p) => progress('layout', p * 0.95)
     const { res } = await readCrop(layoutPool, { x: 0, y: 0, w: W, h: H }, s, 'gray', { psm: '3' }, 'layout', '全体').finally(() => {
       layoutPool.onRecognizeProgress = null
     })
     const map = (q: Rect): Rect => ({ x: (q.x - 16) / s, y: (q.y - 16) / s, w: q.w / s, h: q.h / s })
-    const words = res.lines.flatMap((l) => l.words).map((w) => ({ ...w, rect: map(w.rect), symbols: [] }))
+    // 単語の枠は結合ミスで大きくなりがちなので、文字(シンボル)単位の高さを文字高として使う
+    const words = res.lines.flatMap((l) => l.words).map((w) => {
+      const sh = w.symbols.map((sy) => sy.rect.h).filter((h) => h > 0)
+      const maxH = Math.max(0, ...sh)
+      const ch = median(sh.filter((h) => h > maxH * 0.45)) / s
+      return { ...w, rect: map(w.rect), symbols: w.symbols.map((sy) => ({ ...sy, rect: map(sy.rect) })), ch: ch > 0 ? Math.min(ch, w.rect.h / s) : w.rect.h / s }
+    })
+    for (const w of words) wordCharH.set(w, w.ch)
     layoutRows = groupWordsIntoRows(words)
     emit({ type: 'marks', kind: 'word', rects: words.map((w) => w.rect) })
-    const digitWordHeights = words.filter((w) => /\d/.test(w.text)).map((w) => w.rect.h)
-    charH = median(digitWordHeights) || median(words.map((w) => w.rect.h)) || H / 80
+    if (!input.pdfTextItems || input.pdfTextItems.length <= 5) emit({ type: 'textrows', source: 'ocr', rows: groupFullRows(words) })
+    const digitWordHeights = words.filter((w) => /\d/.test(w.text)).map((w) => w.ch)
+    charH = median(digitWordHeights) || median(words.map((w) => w.ch)) || H / 80
     log('info', `${words.length} 語を検出。推定文字高 ≒ ${charH.toFixed(1)}px`, 'layout')
     emit({ type: 'stage', stage: 'layout', status: 'done' })
   }
   progress('layout', 1)
 
+  /** 連結成分による文字列検出(アンカー精査と Stage 3 で共用、1回だけ計算) */
+  let ccCache: { lines: (TextLine & { charHeight: number })[]; count: number } | null = null
+  const detectCcLines = () => {
+    if (ccCache) return ccCache
+    const { canvas: small, scale: s } = downscale(src, 2000)
+    const gray = toGray(small)
+    const th = otsuThreshold(gray)
+    // 通常(黒文字)と反転(白抜き文字)の両方で連結成分を求める
+    const cc = connectedComponents(binarize(gray, th), small.width, small.height)
+    const ccInv = connectedComponents(binarize(gray, th, true), small.width, small.height)
+    const lineOpts = { minChars: 8, maxChars: 26, minCharHeight: 5, maxCharHeight: small.height / 8 }
+    const lines = [...findTextLines(cc, lineOpts), ...findTextLines(ccInv, lineOpts)]
+      .sort((a, b) => b.score - a.score)
+      .map((l) => ({ ...l, x: l.x / s, y: l.y / s, w: l.w / s, h: l.h / s, charHeight: l.charHeight / s, segments: l.segments.map((g) => ({ ...g, x: g.x / s, w: g.w / s })) }))
+    ccCache = { lines, count: cc.length + ccInv.length }
+    return ccCache
+  }
+
   // ---------- Stage 2: アンカー周辺精査 ----------
   check()
-  const anchorRois: { rect: Rect; h: number; label: string }[] = []
+  const anchorRois: { rect: Rect; h: number; label: string; multi?: boolean }[] = []
   if (layoutRows.length === 0 || confident()) {
     emit({ type: 'stage', stage: 'anchor', status: 'skip', note: layoutRows.length === 0 ? 'アンカーなし' : '確定済み' })
   } else {
@@ -296,21 +358,51 @@ export async function runScan(
     const pushRoi = (rect: Rect, h: number, label: string) => {
       const r = clampRect(rect, W, H)
       if (r.w < 4 || r.h < 4) return
-      if (anchorRois.some((a) => overlapRatio(a.rect, r) > 0.75)) return
-      anchorRois.push({ rect: r, h, label })
+      if (anchorRois.some((a) => iou(a.rect, r) > 0.75)) return
       contextRects.push(r)
+      const wide = clampRect({ x: r.x, y: r.y - h * 0.8, w: r.w, h: r.h + h * 1.6 }, W, H)
+      const rcy = r.y + r.h / 2
+      // 1) 連結成分で見つけた「文字が並ぶ行」が近くにあれば、その位置と文字高を採用(最も正確)
+      const line = detectCcLines()
+        .lines.filter((l) => Math.abs(l.y + l.h / 2 - rcy) < h * 0.9 && l.x + l.w > r.x && l.x < r.x + r.w)
+        .sort((a, b) => Math.abs(a.y + a.h / 2 - rcy) - Math.abs(b.y + b.h / 2 - rcy))[0]
+      // 2) なければ水平投影で文字の帯を探す
+      const band = line ? null : findTextBand(src, wide, rcy)
+      if (line) {
+        const ch = line.charHeight
+        const y = line.y - line.h * 0.4
+        const lh = line.h * 1.8
+        // T + 13桁(区切り込みで 12〜20 文字)らしい区間があれば、そこだけを切り出す
+        const seg = line.segments.filter((g) => g.count >= 12 && g.count <= 20).sort((a, b) => b.count - a.count)[0]
+        if (seg) {
+          anchorRois.push({ rect: clampRect({ x: seg.x - ch * 1.2, y, w: seg.w + ch * 2.4, h: lh }, W, H), h: ch, label: `${label}・番号部分` })
+        }
+        const x0 = Math.min(r.x, line.x) - ch
+        const x1 = line.x + line.w + ch * 1.5
+        anchorRois.push({ rect: clampRect({ x: x0, y, w: x1 - x0, h: lh }, W, H), h: ch, label: `${label}・文字列` })
+      } else if (band && band.h < h * 2.6 && band.h > h * 0.35) {
+        const pad = band.h * 0.35
+        anchorRois.push({ rect: clampRect({ x: r.x, y: band.y - pad, w: r.w, h: band.h + pad * 2 }, W, H), h: band.h, label })
+      } else {
+        anchorRois.push({ rect: r, h, label })
+      }
+      // 複数行のまま読む予備(psm6)
+      anchorRois.push({ rect: wide, h, label: `${label}(複数行)`, multi: true })
     }
     for (const row of layoutRows) {
-      const rowH = median(row.words.map((w) => w.rect.h)) || charH
+      const rowH = median(row.words.map((w) => wordCharH.get(w) ?? w.rect.h)) || charH
+      // 行の中心(枠の結合ミスに強いよう、各単語の中心の中央値)
+      const rowCy = median(row.words.map((w) => w.rect.y + w.rect.h / 2))
       // T で始まり数字が続く語
       row.words.forEach((w, i) => {
         const t = toHalfWidth(w.text)
         const next = row.words[i + 1]
         const isT = /^[TtＴ][\d\-OIlSB]/.test(t) || (/^[TtＴ]$/.test(t) && next && /^\d/.test(toHalfWidth(next.text)))
         if (!isT) return
-        const h = w.rect.h || rowH
+        const h = wordCharH.get(w) || rowH
+        const cy = w.rect.y + w.rect.h / 2
         anchorRects.push(w.rect)
-        pushRoi({ x: w.rect.x - h * 0.8, y: w.rect.y - h * 0.7, w: h * 19, h: h * 2.4 }, h, `「${w.text.slice(0, 6)}」の右側`)
+        pushRoi({ x: w.rect.x - h * 0.8, y: cy - h * 1.1, w: h * 19, h: h * 2.2 }, h, `「${w.text.slice(0, 6)}」の右側`)
       })
       // キーワード(登録番号など)
       const compact = toHalfWidth(row.words.map((w) => w.text).join('')).replace(/\s/g, '')
@@ -319,24 +411,37 @@ export async function runScan(
         const endOffset = m.index + m[0].length
         let acc = 0
         let endWord = row.words[row.words.length - 1]
+        let inWord = 0
         for (const w of row.words) {
-          acc += toHalfWidth(w.text).replace(/\s/g, '').length
-          if (acc >= endOffset) { endWord = w; break }
+          const len = toHalfWidth(w.text).replace(/\s/g, '').length
+          if (acc + len >= endOffset) { endWord = w; inWord = endOffset - acc; break }
+          acc += len
         }
-        const endX = endWord.rect.x + endWord.rect.w
+        // 日本語では「登録番号T123…」が1語に結合されることがあるため、文字(シンボル)単位でキーワードの終わりを求める
+        const wordLen = toHalfWidth(endWord.text).replace(/\s/g, '').length
+        const sym = endWord.symbols.filter((sy) => sy.text.trim())[inWord - 1]
+        const endX = sym && endWord.symbols.length === wordLen
+          ? sym.rect.x + sym.rect.w
+          : endWord.rect.x + (endWord.rect.w * inWord) / Math.max(1, wordLen)
         const kwRect = unionRect(row.words.slice(0, row.words.indexOf(endWord) + 1).map((w) => w.rect))
         anchorRects.push(kwRect)
         const h = rowH
-        pushRoi({ x: endX, y: row.rect.y - h * 0.6, w: h * 22, h: row.rect.h + h * 1.2 }, h, `「${m[0]}」の右側`)
-        pushRoi({ x: kwRect.x - h * 2, y: row.rect.y + row.rect.h - h * 0.3, w: h * 24, h: h * 2.6 }, h, `「${m[0]}」の下側`)
+        pushRoi({ x: endX, y: rowCy - h * 1.1, w: h * 22, h: h * 2.2 }, h, `「${m[0]}」の右側`)
+        pushRoi({ x: kwRect.x - h * 2, y: rowCy + h * 0.5, w: h * 24, h: h * 2.4 }, h, `「${m[0]}」の下側`)
+        // 念のためキーワードの少し手前から行全体も(位置推定がずれていても番号を含むように)
+        pushRoi({ x: endX - h * 3, y: rowCy - h * 1.1, w: h * 26, h: h * 2.2 }, h, `「${m[0]}」の行`)
       }
     }
     emit({ type: 'marks', kind: 'anchor', rects: anchorRects })
-    const rois = anchorRois.slice(0, plan.maxAnchorRois)
+    const rois = anchorRois.slice(0, plan.maxAnchorRois * 2)
     log('info', `アンカー ${anchorRects.length} 個 → 精査領域 ${rois.length} 個`, 'anchor')
+    // 1行モード(psm7)。倍率と前処理を変えて複数回読み、投票する
     const jobs = rois.flatMap((roi) =>
-      plan.targetHeights.flatMap((th) =>
-        plan.variants.map((v) => () => readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, th / roi.h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'anchor', roi.label)),
+      roi.multi
+        ? [() => readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, plan.targetHeights[0] / roi.h)), 'contrast', { psm: '6', whitelist: DIGIT_WHITELIST }, 'anchor', roi.label)]
+        : plan.targetHeights.flatMap((th) =>
+        plan.variants.map((v) => () =>
+          readCrop(digitPool, roi.rect, Math.max(0.5, Math.min(6, th / roi.h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'anchor', roi.label)),
       ),
     )
     await runAll('anchor', jobs)
@@ -350,25 +455,16 @@ export async function runScan(
     emit({ type: 'stage', stage: 'textline', status: 'skip', note: '確定済み' })
   } else {
     emit({ type: 'stage', stage: 'textline', status: 'start' })
-    const { canvas: small, scale: s } = downscale(src, 2000)
-    const gray = toGray(small)
-    const th = otsuThreshold(gray)
-    // 通常(黒文字)と反転(白抜き文字)の両方で連結成分を求める
-    const cc = connectedComponents(binarize(gray, th), small.width, small.height)
-    const ccInv = connectedComponents(binarize(gray, th, true), small.width, small.height)
-    const lineOpts = { minChars: 11, maxChars: 26, minCharHeight: 5, maxCharHeight: small.height / 8 }
-    const lines = [...findTextLines(cc, lineOpts), ...findTextLines(ccInv, lineOpts)]
-      .sort((a, b) => b.score - a.score)
-      .map((l) => ({ ...l, x: l.x / s, y: l.y / s, w: l.w / s, h: l.h / s, charHeight: l.charHeight / s }))
-      .filter((l) => !anchorRois.some((a) => overlapRatio(a.rect, l) > 0.85))
+    const cc = detectCcLines()
+    const lines = cc.lines.filter((l) => l.count >= 11 && !anchorRois.some((a) => overlapRatio(a.rect, l) > 0.85))
     const picked = lines.filter((l) => l.score > 0.3).slice(0, plan.maxTextlines)
     emit({ type: 'marks', kind: 'textline', rects: picked })
-    log('info', `連結成分 ${cc.length + ccInv.length} 個から、文字が並ぶ領域を ${lines.length} 個検出 → 上位 ${picked.length} 個を精査`, 'textline')
+    log('info', `連結成分 ${cc.count} 個から、文字が並ぶ領域を ${lines.length} 個検出 → 上位 ${picked.length} 個を精査`, 'textline')
     const jobs = picked.flatMap((l) =>
       plan.variants.slice(0, 2).map((v) => () => {
         const h = l.charHeight
         const rect = { x: l.x - h * 1.5, y: l.y - h * 0.5, w: l.w + h * 2.5, h: l.h + h }
-        return readCrop(digitPool, rect, Math.max(0.5, Math.min(6, 40 / h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'textline', `${l.count}文字の並び`)
+        return readCrop(digitPool, rect, Math.max(0.5, Math.min(6, 52 / h)), v, { psm: '7', whitelist: DIGIT_WHITELIST }, 'textline', `${l.count}文字の並び`)
       }),
     )
     await runAll('textline', jobs)

@@ -4,6 +4,7 @@ import type { Candidate, Reading, StageId } from '../lib/ocr/aggregate'
 import { runScan, type LogLevel, type MarkKind, type ScanEvent, type ScanInput } from '../lib/ocr/pipeline'
 import { AbortError } from '../lib/ocr/pool'
 import { pickSettings, useSettings } from '../store/settings'
+import type { TextRow } from '../lib/requirements'
 
 export type ScanStatus = 'idle' | 'scanning' | 'done' | 'error' | 'aborted'
 export type StageStatus = 'pending' | 'running' | 'done' | 'skip'
@@ -24,6 +25,8 @@ export interface ScanState {
   progress: number
   progressLabel: string
   model: { status: string; progress: number } | null
+  /** 記載事項チェック用の全文(行) */
+  textRows: { source: 'pdf' | 'ocr'; rows: TextRow[] } | null
   startedAt: number
   finishedAt: number
   error?: string
@@ -49,6 +52,7 @@ const initial = (): ScanState => ({
   progress: 0,
   progressLabel: '',
   model: null,
+  textRows: null,
   startedAt: 0,
   finishedAt: 0,
 })
@@ -88,6 +92,11 @@ export function useScan() {
         break
       case 'peek':
         s.peek = { stage: e.stage, image: e.image, text: e.text, label: e.label, n: (s.peek?.n ?? 0) + 1 }
+        {
+          // デバッグ用に直近のルーペ画像を保持(メモリを食わないよう上限あり)
+          const w = window as unknown as { __invoicePeeks?: Peek[] }
+          w.__invoicePeeks = [...(w.__invoicePeeks ?? []).slice(-59), s.peek]
+        }
         break
       case 'marks':
         s.marks = { ...s.marks, [e.kind]: e.rects }
@@ -105,10 +114,15 @@ export function useScan() {
       case 'log':
         s.logs = [...s.logs.slice(-199), { id: ++logId.current, t: performance.now() - s.startedAt, level: e.level, message: e.message, stage: e.stage }]
         break
+      case 'textrows':
+        s.textRows = { source: e.source, rows: e.rows }
+        break
       case 'model':
         s.model = { status: e.status, progress: e.progress }
         break
     }
+    // デバッグ用(開発者ツールから window.__invoiceScan で参照可能)
+    ;(window as unknown as { __invoiceScan?: ScanState }).__invoiceScan = s
     flush()
   }, [flush])
 
@@ -117,6 +131,7 @@ export function useScan() {
     const ac = new AbortController()
     abortRef.current = ac
     stateRef.current = { ...initial(), status: 'scanning', startedAt: performance.now() }
+    ;(window as unknown as { __invoicePeeks?: Peek[] }).__invoicePeeks = []
     flush()
     try {
       const settings = pickSettings(useSettings.getState())

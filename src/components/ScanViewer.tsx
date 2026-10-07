@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { Rect } from '../lib/image'
 import type { ScanState } from '../hooks/useScan'
-import type { StageId } from '../lib/ocr/aggregate'
+import { isPrimary, type StageId } from '../lib/ocr/aggregate'
 
 const STAGE_COLOR: Record<StageId, string> = {
   pdf: '#0ea5e9',
@@ -15,6 +15,8 @@ interface Props {
   image: HTMLCanvasElement
   state: ScanState
   highlight?: string | null
+  /** 記載事項チェックなどで強調する領域 */
+  highlightRects?: Rect[] | null
 }
 
 const MAX_DISPLAY = 1600
@@ -23,13 +25,15 @@ const MAX_DISPLAY = 1600
  * 画像 + 捜査オーバーレイ。
  * 背景(画像)と前景(オーバーレイ)の2枚のキャンバスを重ね、前景だけ毎フレーム描き直す。
  */
-export function ScanViewer({ image, state, highlight }: Props) {
+export function ScanViewer({ image, state, highlight, highlightRects }: Props) {
   const baseRef = useRef<HTMLCanvasElement>(null)
   const overRef = useRef<HTMLCanvasElement>(null)
   const stateRef = useRef(state)
   stateRef.current = state
   const hlRef = useRef(highlight)
   hlRef.current = highlight
+  const hlRectsRef = useRef(highlightRects)
+  hlRectsRef.current = highlightRects
 
   const scale = Math.min(1, MAX_DISPLAY / Math.max(image.width, image.height))
   const dw = Math.round(image.width * scale)
@@ -103,8 +107,8 @@ export function ScanViewer({ image, state, highlight }: Props) {
       }
 
       // 候補
-      const top = s.candidates.filter((c) => c.valid).slice(0, 5)
-      const invalid = s.candidates.filter((c) => !c.valid).slice(0, 5)
+      const top = s.candidates.filter(isPrimary).slice(0, 3)
+      const invalid = s.candidates.filter((c) => !isPrimary(c))
       const fontPx = Math.max(12, dw / 55)
       ctx.font = `bold ${fontPx}px ui-monospace, monospace`
       const drawCand = (digits: string, rects: Rect[], ok: boolean, emphasize: boolean) => {
@@ -132,8 +136,22 @@ export function ScanViewer({ image, state, highlight }: Props) {
           }
         }
       }
-      for (const c of invalid) drawCand(c.digits, c.rects.slice(0, 2), false, hlRef.current === c.digits)
+      // 検算NGは、結果一覧でカーソルを合わせたときだけ表示(誤読候補で画面が騒がしくならないように)
+      for (const c of invalid) if (hlRef.current === c.digits) drawCand(c.digits, c.rects.slice(0, 2), false, true)
       for (const c of top) drawCand(c.digits, c.rects.slice(0, 3), true, hlRef.current === c.digits || (!hlRef.current && c === top[0] && !scanning))
+
+      // 記載事項の強調
+      const hr = hlRectsRef.current
+      if (hr) {
+        ctx.lineWidth = lw * 2.5
+        ctx.strokeStyle = '#0ea5e9'
+        ctx.fillStyle = 'rgba(14,165,233,0.18)'
+        for (const r of hr) {
+          const [x, y, w, h] = R(r)
+          ctx.fillRect(x - lw * 2, y - lw * 2, w + lw * 4, h + lw * 4)
+          ctx.strokeRect(x - lw * 2, y - lw * 2, w + lw * 4, h + lw * 4)
+        }
+      }
 
       raf = requestAnimationFrame(draw)
     }
@@ -160,8 +178,7 @@ export function Legend() {
     ['#f59e0b', 'アンカー(T・登録番号)'],
     ['#a855f7', '文字が並ぶ領域'],
     ['#14b8a6', 'タイル走査'],
-    ['#10b981', '検算OK'],
-    ['#f43f5e', '検算NG'],
+    ['#10b981', 'T番号(検算OK)'],
   ]
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">

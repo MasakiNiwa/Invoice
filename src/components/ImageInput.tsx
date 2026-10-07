@@ -36,7 +36,7 @@ export function ImageInput({ onFile, onSample, compact }: Props) {
   }
 
   const buttons = (
-    <div className={`grid gap-2 ${compact ? 'grid-cols-4' : 'grid-cols-2 sm:grid-cols-4'}`}>
+    <div className={`grid gap-2 ${compact ? 'grid-cols-4 [&>button]:flex-col [&>button]:gap-0.5 [&>button]:px-1 [&>button]:py-2 [&>button]:text-xs [&>button]:whitespace-nowrap sm:[&>button]:flex-row sm:[&>button]:text-sm' : 'grid-cols-2 sm:grid-cols-4'}`}>
       <button type="button" className="btn-primary" onClick={() => fileRef.current?.click()}>
         <FileUp size={18} /> {compact ? 'ファイル' : 'ファイルを選択'}
       </button>
