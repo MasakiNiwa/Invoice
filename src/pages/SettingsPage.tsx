@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { RotateCcw } from 'lucide-react'
-import { useSettings, type ScanStrength, type Theme } from '../store/settings'
+import { useSettings, type Engine, type PaddleBackendPref, type ScanStrength, type Theme } from '../store/settings'
+import { webGpuAvailable } from '../lib/ocr/paddle'
 
 function Row({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return (
@@ -53,6 +54,24 @@ export default function SettingsPage() {
       <p className="text-xs text-slate-500">設定はこの端末のブラウザに保存されます。</p>
 
       <section className="card px-4">
+        <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-teal-600">OCRエンジン</h2>
+        <Row
+          title="エンジン"
+          desc="PaddleOCR(PP-OCRv5): 日本語に強く高精度。WebGPU対応の端末ではGPUで高速に動きます(初回 約50MB)。Tesseract: 従来のエンジン(初回 約16MB)。"
+        >
+          <Segmented<Engine> value={s.engine} onChange={(v) => s.set({ engine: v })} options={[['paddle', 'PaddleOCR'], ['tesseract', 'Tesseract']]} />
+        </Row>
+        {s.engine === 'paddle' && (
+          <Row
+            title="PaddleOCR の実行環境"
+            desc={`自動: WebGPU が使えればGPU、だめならCPU(WebAssembly)。この端末の WebGPU: ${webGpuAvailable() ? '対応' : '非対応'}`}
+          >
+            <Segmented<PaddleBackendPref> value={s.paddleBackend} onChange={(v) => s.set({ paddleBackend: v })} options={[['auto', '自動'], ['webgpu', 'GPU'], ['wasm', 'CPU']]} />
+          </Row>
+        )}
+      </section>
+
+      <section className="card px-4">
         <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-teal-600">読み取り</h2>
         <Row title="スキャン強度" desc="徹底にすると、拡大倍率・前処理・タイル分割を増やして粘り強く探します(時間がかかります)">
           <Segmented<ScanStrength> value={s.strength} onChange={(v) => s.set({ strength: v })} options={[['quick', '速い'], ['standard', '標準'], ['thorough', '徹底']]} />
@@ -60,10 +79,10 @@ export default function SettingsPage() {
         <Row title="早期終了" desc="T付き・検算OK・複数回一致の候補が得られたら、残りの走査を省略します">
           <Toggle checked={s.earlyExit} onChange={(v) => s.set({ earlyExit: v })} />
         </Row>
-        <Row title="日本語レイアウト解析" desc="「登録番号」等の日本語キーワードを手がかりにします。オフにすると初回ダウンロードが軽くなります(日本語モデル 約2MB)">
+        <Row title="日本語レイアウト解析(Tesseract)" desc="Tesseract 使用時、「登録番号」等の日本語キーワードを手がかりにします。オフにすると初回ダウンロードが軽くなります(日本語モデル 約2MB)">
           <Toggle checked={s.useJapanese} onChange={(v) => s.set({ useJapanese: v })} />
         </Row>
-        <Row title="並列OCR数" desc="数字読み取り用ワーカーの数。多いほど速いですが、メモリを使います">
+        <Row title="並列OCR数(Tesseract)" desc="Tesseract の数字読み取り用ワーカーの数。多いほど速いですが、メモリを使います">
           <div className="flex items-center gap-3">
             <input type="range" min={1} max={6} value={s.workers} onChange={(e) => s.set({ workers: Number(e.target.value) })} className="accent-teal-600" />
             <span className="w-6 text-center font-mono text-sm">{s.workers}</span>

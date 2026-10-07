@@ -8,6 +8,7 @@
 ## 特長
 
 - 📥 **入力**: ドラッグ&ドロップ / ファイル選択(画像・PDF)/ スクショ貼り付け(Ctrl+V)/ スマホのカメラ撮影
+- 🚀 **2つのOCRエンジン**: 日本語に強い PaddleOCR(PP-OCRv5、WebGPU で GPU 実行)と Tesseract を切り替え可能
 - 🔍 **多段捜査OCR**: 全体を1回OCRするだけでなく、
   「T」や「登録番号」の近くを文字サイズに合わせて拡大して精査、
   「同じ大きさの文字が横に並ぶ領域」を画像処理で検出、
@@ -27,8 +28,8 @@ npm test           # ユニットテスト (Vitest)
 npm run build      # 本番ビルド (dist/)
 ```
 
-- 技術: Vite + React + TypeScript + Tailwind CSS / tesseract.js / pdf.js / zustand
-- OCRのワーカー・WASM・学習データ(eng / jpn)は `scripts/copy-ocr-assets.mjs` で `public/ocr/` にコピーし、自前でホスティングします(CDN非依存)
+- 技術: Vite + React + TypeScript + Tailwind CSS / PaddleOCR (PP-OCRv5) + ONNX Runtime Web (WebGPU/WASM) / tesseract.js / pdf.js / zustand
+- OCRのモデル・ワーカー(PaddleOCR: `public/paddle/`、Tesseract: `public/ocr/`)は `scripts/copy-ocr-assets.mjs` で npm パッケージからコピーし、自前でホスティングします(CDN非依存)
 - 仕様・ロードマップ: [docs/SPEC.md](docs/SPEC.md)
 
 ## デプロイ

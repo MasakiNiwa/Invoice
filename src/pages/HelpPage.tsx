@@ -55,7 +55,7 @@ export default function HelpPage() {
         <p>画像全体を1回OCRするだけでなく、T番号が「ありそうな場所」を推定して段階的に絞り込みます。</p>
         <ol className="list-decimal space-y-1 pl-5">
           <li><b>{STAGE_LABEL.pdf}</b>: PDFに文字情報があれば直接読み取り(最も確実)</li>
-          <li><b>{STAGE_LABEL.layout}</b>: 全体を日本語でOCRし、「T」や「登録番号」の位置と文字の大きさを推定</li>
+          <li><b>{STAGE_LABEL.layout}</b>: 全体を日本語でOCRし(PaddleOCR は文字行を検出してから1行ずつ認識)、「T」や「登録番号」の位置と文字の大きさを推定</li>
           <li><b>{STAGE_LABEL.anchor}</b>: その右側・下側を切り出し、文字が読みやすい大きさに拡大して数字専用モードで何度も読む</li>
           <li><b>{STAGE_LABEL.textline}</b>: 「同じ大きさの文字が横に13〜20個並ぶ」場所を画像処理で探して読む</li>
           <li><b>{STAGE_LABEL.tile}</b>: 画像をタイルに分け、ズームを変えながら全体を走査(見落とし対策)</li>
@@ -89,8 +89,9 @@ export default function HelpPage() {
       <Section title="よくある質問">
         <div className="space-y-2">
           <Faq q="画像はどこかに送信されますか?">いいえ。読み取りはすべてお使いのブラウザ内で行われます。初回のみ、OCRの学習データ(モデル)をCDNからダウンロードします。</Faq>
-          <Faq q="GPUを使って速くなりますか?">現在のOCRエンジン(tesseract.js)はCPU(WebAssembly)で動作し、GPUは使いません。代わりに複数のワーカーで並列処理しています(設定の「並列OCR数」)。将来、WebGPU対応のOCRエンジン(PaddleOCR + ONNX Runtime Web)への切り替えを検討しています。速さ重視なら設定で「スキャン強度: 速い」をお試しください。</Faq>
-          <Faq q="初回が遅いのはなぜ?">OCRモデル(英語・日本語)をダウンロードしているためです。2回目以降はブラウザにキャッシュされ速くなります。</Faq>
+          <Faq q="GPUを使って速くなりますか?">はい。既定のエンジン PaddleOCR は、WebGPU に対応したブラウザ(Chrome / Edge など)ではGPUで動きます。非対応の場合は自動でCPU(WebAssembly)に切り替わります。設定 → 「PaddleOCR の実行環境」で選べます。使われたエンジンは読み取り画面の進捗欄に表示されます。</Faq>
+          <Faq q="PaddleOCR と Tesseract はどちらがいい?">通常は PaddleOCR がおすすめです(日本語・レシートに強く、速い)。古い端末で動かない・重い場合は、設定で Tesseract に切り替えてください。PaddleOCR を起動できなかったときは、自動で Tesseract に切り替わります。</Faq>
+          <Faq q="初回が遅いのはなぜ?">OCRモデルをダウンロードしているためです(PaddleOCR 約30〜50MB、Tesseract 約16MB)。2回目以降はブラウザにキャッシュされ速くなります。</Faq>
           <Faq q="「T未検出」とは?">数字13桁は読めたものの、その直前に「T」が確認できなかった候補です。「登録番号」の近くにあれば、T番号である可能性は高いです。</Faq>
           <Faq q="検算OKなら本物ですか?">チェックディジットが合っているだけで、登録されているとは限りません。必ず公表サイトで名称・登録日などを確認してください。</Faq>
           <Faq q="公表サイトのリンク先が表示されない">国税庁サイトのメンテナンス中や、URL仕様の変更の可能性があります。番号をコピーして公表サイトのトップから検索してください。</Faq>

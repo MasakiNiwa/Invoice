@@ -8,6 +8,10 @@ describe('requirements', () => {
   it('normalizes Japanese OCR spacing', () => {
     expect(normalizeRow('内 消 費 税 等  10 %  ￥3')).toBe('内消費税等10%¥3')
   })
+  it('maps simplified Chinese forms from multilingual OCR', () => {
+    expect(normalizeRow('（内消费税等10%¥3）')).toBe('(内消費税等10%¥3)')
+    expect(normalizeRow('税率10%对象')).toBe('税率10%対象')
+  })
   it('fixes lookalikes in dates', () => {
     expect(normalizeRow('2O24年l2月23日')).toBe('2024年12月23日')
   })

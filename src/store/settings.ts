@@ -3,8 +3,14 @@ import { persist } from 'zustand/middleware'
 
 export type ScanStrength = 'quick' | 'standard' | 'thorough'
 export type Theme = 'system' | 'light' | 'dark'
+export type Engine = 'paddle' | 'tesseract'
+export type PaddleBackendPref = 'auto' | 'webgpu' | 'wasm'
 
 export interface Settings {
+  /** OCR エンジン */
+  engine: Engine
+  /** PaddleOCR の実行環境(auto = WebGPU が使えれば GPU) */
+  paddleBackend: PaddleBackendPref
   /** 数字OCRの並列ワーカー数 */
   workers: number
   /** 全体レイアウト解析に日本語モデルを使う(「登録番号」等のキーワード検出) */
@@ -22,6 +28,8 @@ export interface Settings {
 }
 
 export const defaultSettings: Settings = {
+  engine: 'paddle',
+  paddleBackend: 'auto',
   workers: Math.min(4, Math.max(1, Math.floor((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 2) / 2) || 2)),
   useJapanese: true,
   strength: 'standard',
@@ -44,11 +52,16 @@ export const useSettings = create<SettingsStore>()(
       set: (patch) => set(patch),
       reset: () => set(defaultSettings),
     }),
-    { name: 'invoice-checker-settings', version: 1 },
+    {
+      name: 'invoice-checker-settings',
+      version: 2,
+      // v1 → v2: エンジン設定を追加(既存ユーザーにも既定値を補う)
+      migrate: (persisted) => ({ ...defaultSettings, ...(persisted as Partial<Settings>) }),
+    },
   ),
 )
 
 export function pickSettings(s: Settings): Settings {
-  const { workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
-  return { workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
+  const { engine, paddleBackend, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
+  return { engine, paddleBackend, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
 }

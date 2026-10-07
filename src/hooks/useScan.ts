@@ -5,6 +5,7 @@ import { runScan, type LogLevel, type MarkKind, type ScanEvent, type ScanInput }
 import { AbortError } from '../lib/ocr/pool'
 import { pickSettings, useSettings } from '../store/settings'
 import type { TextRow } from '../lib/requirements'
+import type { EngineId } from '../lib/ocr/engine'
 
 export type ScanStatus = 'idle' | 'scanning' | 'done' | 'error' | 'aborted'
 export type StageStatus = 'pending' | 'running' | 'done' | 'skip'
@@ -27,6 +28,8 @@ export interface ScanState {
   model: { status: string; progress: number } | null
   /** 記載事項チェック用の全文(行) */
   textRows: { source: 'pdf' | 'ocr'; rows: TextRow[] } | null
+  /** 実際に使われた OCR エンジン(フォールバック後) */
+  engine: { id: EngineId; label: string } | null
   startedAt: number
   finishedAt: number
   error?: string
@@ -53,6 +56,7 @@ const initial = (): ScanState => ({
   progressLabel: '',
   model: null,
   textRows: null,
+  engine: null,
   startedAt: 0,
   finishedAt: 0,
 })
@@ -113,6 +117,9 @@ export function useScan() {
         break
       case 'log':
         s.logs = [...s.logs.slice(-199), { id: ++logId.current, t: performance.now() - s.startedAt, level: e.level, message: e.message, stage: e.stage }]
+        break
+      case 'engine':
+        s.engine = { id: e.engine, label: e.label }
         break
       case 'textrows':
         s.textRows = { source: e.source, rows: e.rows }

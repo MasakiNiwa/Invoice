@@ -19,7 +19,8 @@
 | スタイル | Tailwind CSS v4 | レスポンシブ/ダークモードを少ない記述で実現 |
 | アイコン | lucide-react | 軽量・MIT |
 | 状態管理 | zustand (+persist) | 設定のlocalStorage保存が簡単 |
-| OCR | tesseract.js (LSTM) | ブラウザで動く定番OCR、Worker並列可 |
+| OCR(既定) | PaddleOCR PP-OCRv5 mobile + ONNX Runtime Web | 日本語に強い。WebGPU で GPU 実行、非対応時は WebAssembly |
+| OCR(選択可) | tesseract.js (LSTM) | ブラウザで動く定番OCR、Worker並列可。PaddleOCR 起動失敗時のフォールバック |
 | PDF | pdf.js (pdfjs-dist) | テキスト層の直接抽出+ページ画像化 |
 | テスト | Vitest | Viteと同じ設定で動く |
 | CI/CD | GitHub Actions → Pages | mainへのマージで自動公開 |
@@ -60,6 +61,17 @@
 | 2 | アンカー周辺精査 | アンカーの右側(T番号が並ぶ想定幅 ≒ 文字高×16)を切り出し、文字高が約40pxになるよう拡大、複数の前処理(グレー/二値化/反転)×数字専用OCR(1行モード)で読む |
 | 3 | 文字列らしさ検出 | 連結成分解析で「同じ大きさの文字が横に13〜20個並ぶ領域」を検出し、その行を数字専用OCRで読む |
 | 4 | タイル走査 | 画像を重なりありのタイルに分割し、ズームレベルを変えながら(粗→細)走査。見落とし対策 |
+
+### OCR エンジン
+
+| | PaddleOCR(既定) | Tesseract |
+| --- | --- | --- |
+| モデル | PP-OCRv5 mobile 多言語(検出 4.9MB + 認識 16.6MB) | eng / jpn best_int |
+| 実行 | ONNX Runtime Web(WebGPU → WASM) | WASM(Worker 並列) |
+| 1行読み | 認識器に直接(高さ48pxに正規化) | PSM7 + 数字ホワイトリスト |
+| 全体・タイル | DBNet で行検出 → 行ごとに認識(8行ずつバッチ) | PSM3 / PSM11 |
+
+PaddleOCR は日本語の漢字を簡体字で出すことがあるため、記載事項チェックでは頻出字を日本の字体に正規化する。
 
 ### 候補の集計
 
@@ -105,7 +117,7 @@
 | 1 | 基盤(ナビ・設定・ヘルプ・バージョン)、入力4種、検算、多段OCR、可視化、公表サイトリンク、Pages自動デプロイ | ✅ v0.1.0 |
 | 1.1 | ヘッダーに「公表サイト」「クリア」ボタン、インボイス記載事項チェック(目安)・簡易インボイス判定・税額検算、レシート写真の精度改善(文字列検出とアンカーの連携・適応的二値化) | ✅ v0.2.0 |
 | 2 | 傾き補正・自動回転、超解像/シャープ化前処理、読み取り履歴(ローカル保存)、PWA(オフラインキャッシュ) | 予定 |
-| 3 | WebGPU 対応 OCR エンジン(PaddleOCR + ONNX Runtime Web)への切り替え/併用による高速化・日本語精度向上 | 検討 |
+| 3 | PaddleOCR(PP-OCRv5)エンジン追加・WebGPU 対応・Tesseract との切り替え・自動フォールバック | ✅ v0.3.0 |
 | 4 | 国税庁Web-API連携(登録状況の自動照会、要アプリID/中継)、CSV一括処理 | 検討 |
 
 ## 9. ディレクトリ構成
@@ -123,6 +135,8 @@ src/
     pdf.ts        PDF読込(テキスト層・画像化)
     textlines.ts  連結成分による文字列らしさ検出
     ocr/
+      engine.ts   OCRエンジン共通インターフェース
+      paddle.ts   PaddleOCR(DBNet 検出 + CTC 認識)を ONNX Runtime Web で実行
       pool.ts     tesseract.js ワーカープール
       pipeline.ts 多段捜査パイプライン(イベント駆動)
       aggregate.ts 候補集計・投票

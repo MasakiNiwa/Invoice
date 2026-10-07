@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Clock, Loader2, RotateCcw, ScrollText, Square, Upload } from 'lucide-react'
+import { Clock, Cpu, Loader2, RotateCcw, ScrollText, Square, Upload } from 'lucide-react'
 import { CandidateCard } from '../components/CandidateCard'
 import { ImageInput } from '../components/ImageInput'
 import { ManualCheck } from '../components/ManualCheck'
@@ -223,8 +223,21 @@ export default function ScanPage() {
                 <span>{state.progressLabel}</span>
                 <span>{Math.round(state.progress * 100)}%</span>
               </div>
+              {state.engine && (
+                <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                  <Cpu size={12} /> {state.engine.label}
+                </p>
+              )}
               {state.model && state.model.status !== 'ready' && scanning && (
-                <p className="mt-2 text-xs text-slate-500">OCRモデル: {state.model.status} {Math.round(state.model.progress * 100)}%</p>
+                <div className="mt-2">
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>OCRモデル準備中: {state.model.status}</span>
+                    <span>{Math.round(state.model.progress * 100)}%</span>
+                  </div>
+                  <div className="mt-1 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                    <div className="h-full bg-sky-500 transition-[width]" style={{ width: `${Math.round(state.model.progress * 100)}%` }} />
+                  </div>
+                </div>
               )}
               {state.error && <p className="mt-2 text-sm text-rose-600">{state.error}</p>}
             </div>
@@ -247,7 +260,7 @@ export default function ScanPage() {
               )}
             </section>
 
-            <RequirementsPanel report={report} scanning={scanning} japaneseOff={!useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} onHover={setHlRects} />
+            <RequirementsPanel report={report} scanning={scanning} japaneseOff={state.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} onHover={setHlRects} />
 
             <PeekPanel peek={state.peek} />
 
