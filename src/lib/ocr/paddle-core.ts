@@ -123,7 +123,7 @@ export class PaddleCore {
       const lineMode = params.psm === '7' || params.psm === '8' || params.psm === '13'
       if (lineMode) {
         const full = { x: 0, y: 0, w: img.width, h: img.height }
-        const [r] = await this.recBatch(bmp, [full])
+        const [r] = await this.recBatch(bmp, [full], params.recStretch ?? 1)
         return { text: r.text, conf: r.conf, lines: r.text ? [toLine(r.text, r.conf, full, r.symbols)] : [] }
       }
       // 全体解析は呼び出し側で解像度を決めている(スキャン強度)ので、ここでは上限だけ設ける
@@ -136,7 +136,8 @@ export class PaddleCore {
       const order = boxes.map((b, i) => ({ b, i, r: b.w / Math.max(1, b.h) })).sort((a, b) => a.r - b.r)
       for (let i = 0; i < order.length; i += B) {
         const batch = order.slice(i, i + B).map((o) => o.b)
-        const rs = await this.recBatch(bmp, batch)
+        // 余白(recPad)を指定すると検出枠より広めに切り出す(既定は枠そのまま。余白を変えた読み直しは記載事項精査で行う)
+        const rs = await this.recBatch(bmp, batch.map((b) => padRect(b, boxes, img.width, img.height, params.recPadY ?? 0, params.recPadX ?? 0)))
         rs.forEach((r, k) => {
           if (r.text.trim()) lines.push(toLine(r.text, r.conf, batch[k], r.symbols))
         })
@@ -204,9 +205,9 @@ export class PaddleCore {
   }
 
   /** 複数行をまとめて認識(幅を最大幅に揃えてバッチ実行) */
-  private async recBatch(image: ImageBitmap, rects: Rect[]): Promise<{ text: string; conf: number; symbols: OcrSymbol[] }[]> {
+  private async recBatch(image: ImageBitmap, rects: Rect[], stretch = 1): Promise<{ text: string; conf: number; symbols: OcrSymbol[] }[]> {
     if (rects.length === 0) return []
-    const widths = rects.map((r) => Math.min(3200, Math.max(16, Math.round((r.w * REC_H) / Math.max(1, r.h)))))
+    const widths = rects.map((r) => Math.min(3200, Math.max(16, Math.round(((r.w * REC_H) / Math.max(1, r.h)) * stretch))))
     const W = Math.max(...widths)
     const N = rects.length
     const plane = REC_H * W
@@ -266,6 +267,39 @@ export class PaddleCore {
       return { text, conf, symbols }
     })
   }
+}
+
+/**
+ * 認識用に検出枠を広げる。ただし隣の文字行に食い込まないよう、
+ * 上下左右それぞれ「隣の枠までの隙間の45%」までに抑える(行間の詰まった文書で他の行を巻き込まない)
+ */
+export function padRect(r: Rect, all: Rect[], W: number, H: number, py: number, px: number): Rect {
+  let up = r.y
+  let down = H - (r.y + r.h)
+  let left = r.x
+  let right = W - (r.x + r.w)
+  for (const o of all) {
+    if (o === r) continue
+    const xOverlap = Math.min(r.x + r.w, o.x + o.w) - Math.max(r.x, o.x)
+    const yOverlap = Math.min(r.y + r.h, o.y + o.h) - Math.max(r.y, o.y)
+    if (xOverlap > 0) {
+      if (o.y + o.h <= r.y) up = Math.min(up, r.y - (o.y + o.h))
+      else if (o.y >= r.y + r.h) down = Math.min(down, o.y - (r.y + r.h))
+    }
+    if (yOverlap > Math.min(r.h, o.h) * 0.3) {
+      if (o.x + o.w <= r.x) left = Math.min(left, r.x - (o.x + o.w))
+      else if (o.x >= r.x + r.w) right = Math.min(right, o.x - (r.x + r.w))
+    }
+  }
+  const padUp = Math.min(r.h * py, up * 0.45)
+  const padDown = Math.min(r.h * py, down * 0.45)
+  const padL = Math.min(r.h * px, left * 0.45)
+  const padR = Math.min(r.h * px, right * 0.45)
+  const x0 = Math.max(0, r.x - padL)
+  const y0 = Math.max(0, r.y - padUp)
+  const x1 = Math.min(W, r.x + r.w + padR)
+  const y1 = Math.min(H, r.y + r.h + padDown)
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
 function toLine(text: string, conf: number, rect: Rect, symbols: OcrSymbol[]): OcrLine {

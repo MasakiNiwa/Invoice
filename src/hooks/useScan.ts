@@ -27,7 +27,7 @@ export interface ScanState {
   progressLabel: string
   model: { status: string; progress: number } | null
   /** 記載事項チェック用の全文(行) */
-  textRows: { source: 'pdf' | 'ocr'; rows: TextRow[] } | null
+  textRows: { source: 'pdf' | 'ocr'; rows: TextRow[]; refined?: number } | null
   /** 実際に使われた OCR エンジン(フォールバック後) */
   engine: { id: EngineId; label: string } | null
   /** 向き補正後の画像(補正したときのみ) */
@@ -44,13 +44,14 @@ const initialStages = (): ScanState['stages'] => ({
   anchor: { status: 'pending' },
   textline: { status: 'pending' },
   tile: { status: 'pending' },
+  detail: { status: 'pending' },
 })
 
 const initial = (): ScanState => ({
   status: 'idle',
   stages: initialStages(),
   focus: [],
-  marks: { word: [], anchor: [], textline: [], tile: [] },
+  marks: { word: [], anchor: [], textline: [], tile: [], detail: [] },
   peek: null,
   readings: [],
   candidates: [],
@@ -131,7 +132,7 @@ export function useScan() {
         s.engine = { id: e.engine, label: e.label }
         break
       case 'textrows':
-        s.textRows = { source: e.source, rows: e.rows }
+        s.textRows = { source: e.source, rows: e.rows, refined: e.refined }
         break
       case 'model':
         s.model = { status: e.status, progress: e.progress }
@@ -142,7 +143,8 @@ export function useScan() {
     flush()
   }, [flush])
 
-  const start = useCallback(async (input: ScanInput) => {
+  /** スキャンを実行し、終了時の状態を返す(中止・エラー時もその状態を返す) */
+  const start = useCallback(async (input: ScanInput): Promise<ScanState | null> => {
     abortRef.current?.abort()
     const ac = new AbortController()
     abortRef.current = ac
@@ -152,10 +154,10 @@ export function useScan() {
     try {
       const settings = pickSettings(useSettings.getState())
       const candidates = await runScan(input, settings, onEvent, ac.signal)
-      if (abortRef.current !== ac) return
+      if (abortRef.current !== ac) return null
       stateRef.current = { ...stateRef.current, status: 'done', candidates, focus: [], finishedAt: performance.now() }
     } catch (err) {
-      if (abortRef.current !== ac) return
+      if (abortRef.current !== ac) return null
       const aborted = err instanceof AbortError || ac.signal.aborted
       stateRef.current = {
         ...stateRef.current,
@@ -167,6 +169,7 @@ export function useScan() {
       if (!aborted) console.error(err)
     }
     flush()
+    return stateRef.current
   }, [flush, onEvent])
 
   const abort = useCallback(() => {

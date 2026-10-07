@@ -19,19 +19,24 @@ const SUMMARY_BG: Record<CheckStatus, string> = {
 
 interface Props {
   report: RequirementReport | null
+  /** 複数インボイスのときの見出し(例: インボイス 2) */
+  title?: string
   scanning: boolean
   japaneseOff: boolean
   rows?: TextRow[]
+  /** 記載事項精査で読み直した行数 */
+  refined?: number
   onHover?: (rects: Rect[] | null) => void
 }
 
 /** 適格請求書の記載事項チェック(目安) */
-export function RequirementsPanel({ report, scanning, japaneseOff, rows, onHover }: Props) {
+export function RequirementsPanel({ report, title, scanning, japaneseOff, rows, refined, onHover }: Props) {
   return (
     <div className="card p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
-        <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック
+        <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック{title && <span className="text-indigo-600 dark:text-indigo-300">({title})</span>}
         <span className="whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500 dark:bg-slate-800">目安</span>
+        {!!refined && <span className="whitespace-nowrap rounded-full bg-pink-100 px-2 py-0.5 text-[10px] font-normal text-pink-700 dark:bg-pink-900/50 dark:text-pink-300">{refined}行を精査済み</span>}
         {report?.simplified && <span className="ml-auto whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-normal text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易インボイス(レシート)と判定</span>}
       </div>
       {japaneseOff ? (
@@ -68,6 +73,37 @@ export function RequirementsPanel({ report, scanning, japaneseOff, rows, onHover
               )
             })}
           </ul>
+          {report.breakdown && report.breakdown.lines.length > 0 && (
+            <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 text-xs dark:border-slate-800">
+              <table className="w-full">
+                <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/60">
+                  <tr>
+                    <th className="px-2 py-1 text-left font-medium">税率</th>
+                    <th className="px-2 py-1 text-right font-medium">対象額</th>
+                    <th className="px-2 py-1 text-right font-medium">消費税</th>
+                    <th className="px-2 py-1 text-right font-medium">検算</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {report.breakdown.lines.map((l) => (
+                    <tr key={l.rate} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-2 py-1">{l.rate}%{l.rate === 8 ? '(軽減)' : ''}</td>
+                      <td className="px-2 py-1 text-right">{l.base !== null ? `¥${l.base.toLocaleString()}` : '-'}</td>
+                      <td className="px-2 py-1 text-right">{l.tax !== null ? `¥${l.tax.toLocaleString()}` : '-'}</td>
+                      <td className="px-2 py-1 text-right font-sans">{l.ok === null ? '-' : l.ok ? <span className="text-emerald-600">✓ {l.mode}</span> : <span className="text-amber-600">要確認</span>}</td>
+                    </tr>
+                  ))}
+                  {report.breakdown.total !== null && (
+                    <tr className="border-t border-slate-200 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-800/40">
+                      <td className="px-2 py-1 font-sans">合計</td>
+                      <td className="px-2 py-1 text-right" colSpan={2}>¥{report.breakdown.total.toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right font-sans">{report.breakdown.totalOk === null ? '-' : report.breakdown.totalOk ? <span className="text-emerald-600">✓ 一致</span> : <span className="text-amber-600">要確認</span>}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
           {rows && rows.length > 0 && (
             <details className="mt-2">
               <summary className="cursor-pointer text-xs text-slate-500">読み取った全文({rows.length}行)</summary>

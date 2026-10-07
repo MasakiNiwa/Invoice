@@ -15,6 +15,10 @@ export interface Settings {
   preloadModels: boolean
   /** 横倒し・上下逆の画像を自動で回転(PaddleOCR) */
   autoRotate: boolean
+  /** 記載事項に関係する行を拡大して読み直す */
+  refineRequirements: boolean
+  /** 複数ページの PDF は全ページを一括で読み取る */
+  batchPdf: boolean
   /** 読み取り結果を履歴に保存 */
   saveHistory: boolean
   /** 数字OCRの並列ワーカー数 */
@@ -39,6 +43,8 @@ export const defaultSettings: Settings = {
   preloadModels: true,
   autoRotate: true,
   saveHistory: true,
+  refineRequirements: true,
+  batchPdf: true,
   workers: Math.min(4, Math.max(1, Math.floor((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 2) / 2) || 2)),
   useJapanese: true,
   strength: 'standard',
@@ -71,6 +77,6 @@ export const useSettings = create<SettingsStore>()(
 )
 
 export function pickSettings(s: Settings): Settings {
-  const { engine, paddleBackend, preloadModels, autoRotate, saveHistory, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
-  return { engine, paddleBackend, preloadModels, autoRotate, saveHistory, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
+  const { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
+  return { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
 }
