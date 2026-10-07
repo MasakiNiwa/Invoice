@@ -1,10 +1,11 @@
 import { NavLink, useNavigate } from 'react-router'
-import { ExternalLink, HelpCircle, Info, Loader2, ScanSearch, Settings, X } from 'lucide-react'
+import { ExternalLink, HelpCircle, History, Info, Loader2, ScanSearch, Settings, X } from 'lucide-react'
 import { invoiceKohyoUrl } from '../lib/links'
 import { useSession } from '../store/session'
 
 const items = [
   { to: '/', label: '読み取り', icon: ScanSearch, end: true },
+  { to: '/history', label: '履歴', icon: History },
   { to: '/settings', label: '設定', icon: Settings },
   { to: '/help', label: 'ヘルプ', icon: HelpCircle },
   { to: '/about', label: 'バージョン', icon: Info },
@@ -88,7 +89,7 @@ export function TopBar() {
 export function BottomBar() {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden dark:border-slate-800 dark:bg-slate-950/95">
-      <div className="grid grid-cols-4">
+      <div className="grid grid-cols-5">
         {items.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}

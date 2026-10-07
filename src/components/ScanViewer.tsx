@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import type { Rect } from '../lib/image'
 import type { ScanState } from '../hooks/useScan'
 import { isPrimary, type StageId } from '../lib/ocr/aggregate'
@@ -17,6 +17,8 @@ interface Props {
   highlight?: string | null
   /** 記載事項チェックなどで強調する領域 */
   highlightRects?: Rect[] | null
+  /** 画像の上に重ねる表示(準備中・進捗など) */
+  overlay?: ReactNode
 }
 
 const MAX_DISPLAY = 1600
@@ -25,7 +27,7 @@ const MAX_DISPLAY = 1600
  * 画像 + 捜査オーバーレイ。
  * 背景(画像)と前景(オーバーレイ)の2枚のキャンバスを重ね、前景だけ毎フレーム描き直す。
  */
-export function ScanViewer({ image, state, highlight, highlightRects }: Props) {
+export function ScanViewer({ image, state, highlight, highlightRects, overlay }: Props) {
   const baseRef = useRef<HTMLCanvasElement>(null)
   const overRef = useRef<HTMLCanvasElement>(null)
   const stateRef = useRef(state)
@@ -163,6 +165,7 @@ export function ScanViewer({ image, state, highlight, highlightRects }: Props) {
     <div className="relative w-full overflow-hidden rounded-xl bg-slate-100 dark:bg-slate-800" style={{ aspectRatio: `${dw} / ${dh}` }}>
       <canvas ref={baseRef} width={dw} height={dh} className="absolute inset-0 h-full w-full" />
       <canvas ref={overRef} width={dw} height={dh} className="absolute inset-0 h-full w-full" />
+      {overlay}
       {state.status === 'scanning' && (
         <div className="pointer-events-none absolute inset-x-0 top-0 h-1 overflow-hidden bg-teal-500/20">
           <div className="h-full bg-teal-500 transition-[width] duration-300" style={{ width: `${Math.round(state.progress * 100)}%` }} />

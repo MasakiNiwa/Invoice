@@ -10,7 +10,7 @@
  * UI はイベント(ScanEvent)を受け取って可視化する。
  */
 import type { Rect, Preprocess } from '../image'
-import { clampRect, cropForOcr, downscale, findTextBand, iou, otsuThreshold, overlapRatio, toGray } from '../image'
+import { clampRect, cropForOcr, downscale, findTextBand, iou, rotateCanvas, otsuThreshold, overlapRatio, toGray } from '../image'
 import type { PdfTextItem } from '../pdf'
 import type { TextRow } from '../requirements'
 import { binarize, connectedComponents, findTextLines, type TextLine } from '../textlines'
@@ -37,6 +37,8 @@ export type ScanEvent =
   | { type: 'model'; status: string; progress: number }
   | { type: 'textrows'; source: 'pdf' | 'ocr'; rows: TextRow[] }
   | { type: 'engine'; engine: EngineId; label: string }
+  /** 向きを補正した画像(以降の座標はこの画像基準) */
+  | { type: 'image'; canvas: HTMLCanvasElement; rotation: 90 | 180 | 270 }
 
 export interface ScanInput {
   canvas: HTMLCanvasElement
@@ -84,6 +86,13 @@ const STAGE_SPAN: Record<StageId, [number, number]> = {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+/** 次の描画フレームまで待つ(画面を固めないため) */
+const nextFrame = () =>
+  new Promise<void>((r) => {
+    // 非表示タブでは requestAnimationFrame が止まるので、タイムアウトでも進める
+    const t = setTimeout(r, 100)
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => setTimeout(() => (clearTimeout(t), r()), 0))
+  })
 const median = (xs: number[]) => {
   if (xs.length === 0) return 0
   const s = [...xs].sort((a, b) => a - b)
@@ -178,15 +187,56 @@ export function readingsFromOcr(res: OcrResult, mapRect: (r: Rect) => Rect, stag
   return out
 }
 
+/**
+ * 画像の向きを推定する。文字行の検出枠が縦長ばかりなら横倒し、
+ * 横長の行を 0°/180° で読み比べて信頼度が大きく違えば上下逆、と判断する。
+ * 返り値は時計回りに回すべき角度(不要なら null)。
+ */
+async function detectRotation(src: HTMLCanvasElement, backend: OcrBackend, signal: AbortSignal): Promise<90 | 180 | 270 | null> {
+  const { canvas: small, scale } = downscale(src, 1280)
+  const det = await backend.recognize(small, { psm: '11', detectOnly: true }, signal)
+  const boxes = det.lines.map((l) => l.rect).filter((r) => r.w * r.h > 60)
+  if (boxes.length < 4) return null
+  const tall = boxes.filter((r) => r.h > r.w * 1.5)
+  const wide = boxes.filter((r) => r.w > r.h * 2)
+  /** 候補の角度ごとに、行画像を回して読んだときの平均信頼度 */
+  const score = async (rects: Rect[], degs: (0 | 90 | 180 | 270)[]) => {
+    const out = new Map<number, number>()
+    for (const d of degs) {
+      let s = 0
+      for (const r of rects) {
+        const crop = cropForOcr(src, { x: r.x / scale, y: r.y / scale, w: r.w / scale, h: r.h / scale }, 1, 'gray', 4)
+        const img = d === 0 ? crop : rotateCanvas(crop, d)
+        const res = await backend.recognize(img, { psm: '7' }, signal)
+        s += res.text.replace(/\s/g, '').length >= 2 ? res.conf : 0
+      }
+      out.set(d, s / rects.length)
+    }
+    return out
+  }
+  const biggest = (rs: Rect[]) => [...rs].sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 4)
+  if (tall.length >= boxes.length * 0.6 && tall.length >= 4) {
+    // 横倒し: 縦長の行を 90°/270° 回して読み比べ
+    const s = await score(biggest(tall), [90, 270])
+    return (s.get(90) ?? 0) >= (s.get(270) ?? 0) ? 90 : 270
+  }
+  if (wide.length >= 3) {
+    const s = await score(biggest(wide), [0, 180])
+    if ((s.get(180) ?? 0) > (s.get(0) ?? 0) + 15) return 180
+  }
+  return null
+}
+
 export async function runScan(
   input: ScanInput,
   settings: Settings,
   emit: (e: ScanEvent) => void,
   signal: AbortSignal,
 ): Promise<Candidate[]> {
-  const src = input.canvas
-  const W = src.width
-  const H = src.height
+  // 向き補正で差し替わることがあるので let
+  let src = input.canvas
+  let W = src.width
+  let H = src.height
   const readings: Reading[] = []
   let focusId = 0
   let candidates: Candidate[] = []
@@ -219,6 +269,8 @@ export async function runScan(
 
   // ---------- モデル準備 ----------
   emit({ type: 'progress', value: 0.01, label: 'OCRモデル準備' })
+  // 画像の表示を先に描画させる(重い処理の前にブラウザへ制御を返す)
+  await nextFrame()
   const onModel = (status: string, p: number) => emit({ type: 'model', status, progress: p })
   let engine: EngineId = settings.engine
   let layoutPool!: OcrBackend
@@ -251,6 +303,7 @@ export async function runScan(
   /** 切り出し → 前処理 → OCR → 読み取り登録 */
   const readCrop = async (pool: OcrBackend, rect: Rect, scale: number, mode: Preprocess, params: OcrParams, stage: StageId, label: string) => {
     check()
+    await sleep(0)
     const r = clampRect(rect, W, H)
     const pad = 16
     const crop = cropForOcr(src, r, scale, mode, pad)
@@ -319,6 +372,18 @@ export async function runScan(
     addReadings(found)
     emit({ type: 'stage', stage: 'pdf', status: 'done' })
     progress('pdf', 1)
+  }
+
+  // ---------- 向きの自動補正(PaddleOCR・画像のみ) ----------
+  if (engine === 'paddle' && settings.autoRotate && !confident() && !(input.pdfTextItems && input.pdfTextItems.length > 5)) {
+    const rot = await detectRotation(src, layoutPool, signal)
+    if (rot) {
+      src = rotateCanvas(src, rot)
+      W = src.width
+      H = src.height
+      emit({ type: 'image', canvas: src, rotation: rot })
+      log('info', `画像の向きを自動補正しました(${rot === 180 ? '上下反転' : rot === 90 ? '右に90°回転' : '左に90°回転'})`, 'layout')
+    }
   }
 
   // ---------- Stage 1: 全体レイアウト解析 ----------

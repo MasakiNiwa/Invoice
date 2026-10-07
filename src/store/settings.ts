@@ -11,6 +11,12 @@ export interface Settings {
   engine: Engine
   /** PaddleOCR の実行環境(auto = WebGPU が使えれば GPU) */
   paddleBackend: PaddleBackendPref
+  /** アプリを開いたらモデルを先読み */
+  preloadModels: boolean
+  /** 横倒し・上下逆の画像を自動で回転(PaddleOCR) */
+  autoRotate: boolean
+  /** 読み取り結果を履歴に保存 */
+  saveHistory: boolean
   /** 数字OCRの並列ワーカー数 */
   workers: number
   /** 全体レイアウト解析に日本語モデルを使う(「登録番号」等のキーワード検出) */
@@ -30,6 +36,9 @@ export interface Settings {
 export const defaultSettings: Settings = {
   engine: 'paddle',
   paddleBackend: 'auto',
+  preloadModels: true,
+  autoRotate: true,
+  saveHistory: true,
   workers: Math.min(4, Math.max(1, Math.floor((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 2) / 2) || 2)),
   useJapanese: true,
   strength: 'standard',
@@ -62,6 +71,6 @@ export const useSettings = create<SettingsStore>()(
 )
 
 export function pickSettings(s: Settings): Settings {
-  const { engine, paddleBackend, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
-  return { engine, paddleBackend, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
+  const { engine, paddleBackend, preloadModels, autoRotate, saveHistory, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
+  return { engine, paddleBackend, preloadModels, autoRotate, saveHistory, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
 }

@@ -69,6 +69,16 @@ export default function SettingsPage() {
             <Segmented<PaddleBackendPref> value={s.paddleBackend} onChange={(v) => s.set({ paddleBackend: v })} options={[['auto', '自動'], ['webgpu', 'GPU'], ['wasm', 'CPU']]} />
           </Row>
         )}
+        {s.engine === 'paddle' && (
+          <Row title="向きの自動補正" desc="横向き・上下逆の写真を自動で回転してから読み取ります">
+            <Toggle checked={s.autoRotate} onChange={(v) => s.set({ autoRotate: v })} />
+          </Row>
+        )}
+        {s.engine === 'paddle' && (
+          <Row title="モデルを先読み" desc="アプリを開いたら、画像を選んでいる間に PaddleOCR のモデルを準備しておきます(データセーバー有効時は行いません)">
+            <Toggle checked={s.preloadModels} onChange={(v) => s.set({ preloadModels: v })} />
+          </Row>
+        )}
       </section>
 
       <section className="card px-4">
@@ -100,6 +110,9 @@ export default function SettingsPage() {
         </Row>
         <Row title="スロー再生" desc="捜査の様子をじっくり見たいときに。1回のOCRごとに待ち時間を入れます">
           <Segmented<string> value={String(s.slowMo)} onChange={(v) => s.set({ slowMo: Number(v) })} options={[['0', 'なし'], ['300', '少し'], ['1000', 'じっくり']]} />
+        </Row>
+        <Row title="履歴を保存" desc="読み取り結果(サムネイル・T番号・チェック結果)をこの端末に保存します。最大50件">
+          <Toggle checked={s.saveHistory} onChange={(v) => s.set({ saveHistory: v })} />
         </Row>
         <Row title="テーマ">
           <Segmented<Theme> value={s.theme} onChange={(v) => s.set({ theme: v })} options={[['system', '自動'], ['light', 'ライト'], ['dark', 'ダーク']]} />

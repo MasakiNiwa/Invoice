@@ -256,3 +256,14 @@ export function findTextBand(src: HTMLCanvasElement, rect: Rect, centerY: number
   if (bandH < 4) return null
   return { y: r.y + y0 / scale, h: bandH }
 }
+
+/** Canvas を 90/180/270 度回転した新しい Canvas を返す(時計回り) */
+export function rotateCanvas(src: HTMLCanvasElement, deg: 90 | 180 | 270): HTMLCanvasElement {
+  const swap = deg !== 180
+  const c = createCanvas(swap ? src.height : src.width, swap ? src.width : src.height)
+  const ctx = ctx2d(c)
+  ctx.translate(c.width / 2, c.height / 2)
+  ctx.rotate((deg * Math.PI) / 180)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  return c
+}

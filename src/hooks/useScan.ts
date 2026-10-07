@@ -30,6 +30,9 @@ export interface ScanState {
   textRows: { source: 'pdf' | 'ocr'; rows: TextRow[] } | null
   /** 実際に使われた OCR エンジン(フォールバック後) */
   engine: { id: EngineId; label: string } | null
+  /** 向き補正後の画像(補正したときのみ) */
+  image: HTMLCanvasElement | null
+  rotation: 0 | 90 | 180 | 270
   startedAt: number
   finishedAt: number
   error?: string
@@ -57,6 +60,8 @@ const initial = (): ScanState => ({
   model: null,
   textRows: null,
   engine: null,
+  image: null,
+  rotation: 0,
   startedAt: 0,
   finishedAt: 0,
 })
@@ -117,6 +122,10 @@ export function useScan() {
         break
       case 'log':
         s.logs = [...s.logs.slice(-199), { id: ++logId.current, t: performance.now() - s.startedAt, level: e.level, message: e.message, stage: e.stage }]
+        break
+      case 'image':
+        s.image = e.canvas
+        s.rotation = e.rotation
         break
       case 'engine':
         s.engine = { id: e.engine, label: e.label }
