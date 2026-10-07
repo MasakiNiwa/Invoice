@@ -1,0 +1,95 @@
+import type { ReactNode } from 'react'
+import { RotateCcw } from 'lucide-react'
+import { useSettings, type ScanStrength, type Theme } from '../store/settings'
+
+function Row({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 border-b border-slate-100 py-4 last:border-0 sm:flex-row sm:items-center dark:border-slate-800">
+      <div className="flex-1">
+        <div className="text-sm font-medium">{title}</div>
+        {desc && <div className="mt-0.5 text-xs text-slate-500">{desc}</div>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative h-7 w-12 rounded-full transition ${checked ? 'bg-teal-600' : 'bg-slate-300 dark:bg-slate-700'}`}
+    >
+      <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${checked ? 'left-6' : 'left-1'}`} />
+    </button>
+  )
+}
+
+function Segmented<T extends string>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <div className="inline-flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+      {options.map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          className={`rounded-lg px-3 py-1.5 text-sm transition ${value === v ? 'bg-white font-semibold text-teal-700 shadow-sm dark:bg-slate-950 dark:text-teal-300' : 'text-slate-500'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export default function SettingsPage() {
+  const s = useSettings()
+  return (
+    <div className="mx-auto max-w-3xl space-y-4">
+      <h1 className="text-xl font-bold">設定</h1>
+      <p className="text-xs text-slate-500">設定はこの端末のブラウザに保存されます。</p>
+
+      <section className="card px-4">
+        <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-teal-600">読み取り</h2>
+        <Row title="スキャン強度" desc="徹底にすると、拡大倍率・前処理・タイル分割を増やして粘り強く探します(時間がかかります)">
+          <Segmented<ScanStrength> value={s.strength} onChange={(v) => s.set({ strength: v })} options={[['quick', '速い'], ['standard', '標準'], ['thorough', '徹底']]} />
+        </Row>
+        <Row title="早期終了" desc="T付き・検算OK・複数回一致の候補が得られたら、残りの走査を省略します">
+          <Toggle checked={s.earlyExit} onChange={(v) => s.set({ earlyExit: v })} />
+        </Row>
+        <Row title="日本語レイアウト解析" desc="「登録番号」等の日本語キーワードを手がかりにします。オフにすると初回ダウンロードが軽くなります(日本語モデル 約2MB)">
+          <Toggle checked={s.useJapanese} onChange={(v) => s.set({ useJapanese: v })} />
+        </Row>
+        <Row title="並列OCR数" desc="数字読み取り用ワーカーの数。多いほど速いですが、メモリを使います">
+          <div className="flex items-center gap-3">
+            <input type="range" min={1} max={6} value={s.workers} onChange={(e) => s.set({ workers: Number(e.target.value) })} className="accent-teal-600" />
+            <span className="w-6 text-center font-mono text-sm">{s.workers}</span>
+          </div>
+        </Row>
+        <Row title="推定補正候補を表示" desc="検算NGの読み取りを、誤認しやすい数字の1桁置換で補正した候補も表示します">
+          <Toggle checked={s.showCorrections} onChange={(v) => s.set({ showCorrections: v })} />
+        </Row>
+      </section>
+
+      <section className="card px-4">
+        <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-teal-600">表示</h2>
+        <Row title="捜査の様子を表示" desc="画像上の走査アニメーションとルーペ表示">
+          <Toggle checked={s.showAnimation} onChange={(v) => s.set({ showAnimation: v })} />
+        </Row>
+        <Row title="スロー再生" desc="捜査の様子をじっくり見たいときに。1回のOCRごとに待ち時間を入れます">
+          <Segmented<string> value={String(s.slowMo)} onChange={(v) => s.set({ slowMo: Number(v) })} options={[['0', 'なし'], ['300', '少し'], ['1000', 'じっくり']]} />
+        </Row>
+        <Row title="テーマ">
+          <Segmented<Theme> value={s.theme} onChange={(v) => s.set({ theme: v })} options={[['system', '自動'], ['light', 'ライト'], ['dark', 'ダーク']]} />
+        </Row>
+      </section>
+
+      <button className="btn-ghost" onClick={() => s.reset()}>
+        <RotateCcw size={16} /> 初期設定に戻す
+      </button>
+    </div>
+  )
+}
