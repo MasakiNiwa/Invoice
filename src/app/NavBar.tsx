@@ -1,7 +1,7 @@
-import { NavLink } from 'react-router'
-import { HelpCircle, Info, ScanSearch, Settings } from 'lucide-react'
-import { GithubIcon as Github } from '../components/GithubIcon'
-import { REPO_URL } from '../lib/links'
+import { NavLink, useNavigate } from 'react-router'
+import { ExternalLink, HelpCircle, Info, Loader2, ScanSearch, Settings, X } from 'lucide-react'
+import { invoiceKohyoUrl } from '../lib/links'
+import { useSession } from '../store/session'
 
 const items = [
   { to: '/', label: '読み取り', icon: ScanSearch, end: true },
@@ -10,13 +10,56 @@ const items = [
   { to: '/about', label: 'バージョン', icon: Info },
 ]
 
+/** ヘッダー右上のアクション: クリア / 公表サイトを開く(読み取り成功時のみ有効) */
+function HeaderActions() {
+  const { hasDoc, best, scanning, requestClear } = useSession()
+  const navigate = useNavigate()
+  return (
+    <div className="flex items-center gap-1.5">
+      {hasDoc && (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          onClick={() => {
+            requestClear()
+            navigate('/')
+          }}
+          title="読み込んだ画像と結果をクリア"
+        >
+          <X size={14} /> クリア
+        </button>
+      )}
+      {best ? (
+        <a
+          href={invoiceKohyoUrl(best.digits)}
+          target="_blank"
+          rel="noreferrer"
+          className="relative inline-flex items-center gap-1 rounded-lg bg-teal-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700"
+          title={`T${best.digits} を国税庁 公表サイトで確認`}
+        >
+          {!scanning && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-ping rounded-full bg-emerald-400" />}
+          <ExternalLink size={14} /> 公表サイト
+        </a>
+      ) : (
+        <span
+          className="inline-flex cursor-not-allowed items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-400 dark:bg-slate-800"
+          title="T番号を読み取ると押せるようになります"
+          aria-disabled="true"
+        >
+          {scanning ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />} 公表サイト
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function TopBar() {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85">
-      <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4">
-        <NavLink to="/" className="flex items-center gap-2 font-bold">
-          <img src="./favicon.svg" alt="" className="h-7 w-7" />
-          <span>インボイス確認ツール</span>
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-3 sm:px-4">
+        <NavLink to="/" className="flex min-w-0 items-center gap-2 font-bold">
+          <img src="./favicon.svg" alt="" className="h-7 w-7 shrink-0" />
+          <span className="truncate text-sm sm:text-base">インボイス確認ツール</span>
         </NavLink>
         <nav className="ml-auto hidden items-center gap-1 md:flex">
           {items.map(({ to, label, icon: Icon, end }) => (
@@ -32,13 +75,10 @@ export function TopBar() {
               {label}
             </NavLink>
           ))}
-          <a href={REPO_URL} target="_blank" rel="noreferrer" className="ml-1 rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800" title="GitHub リポジトリ">
-            <Github size={18} />
-          </a>
         </nav>
-        <a href={REPO_URL} target="_blank" rel="noreferrer" className="ml-auto rounded-lg p-2 text-slate-500 md:hidden" title="GitHub リポジトリ">
-          <Github size={20} />
-        </a>
+        <div className="ml-auto md:ml-2">
+          <HeaderActions />
+        </div>
       </div>
     </header>
   )

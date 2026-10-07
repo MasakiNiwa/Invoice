@@ -54,6 +54,14 @@ describe('extractTNumbers', () => {
     const r = extractTNumbers(`請求書 7${NTA} 円`)
     expect(r.some((x) => x.digits === NTA && x.hasT)).toBe(true)
   })
+  it('T misread as 1 (14-digit run)', () => {
+    const r = extractTNumbers('17810648631842')
+    expect(r[0]).toMatchObject({ digits: '7810648631842', hasT: true, valid: true })
+  })
+  it('T read twice as T1', () => {
+    const r = extractTNumbers('T17810648631842 -')
+    expect(r[0]).toMatchObject({ digits: '7810648631842', hasT: true, valid: true })
+  })
   it('ignores too long numbers', () => {
     expect(extractTNumbers('T70000120500021').length).toBe(0)
   })

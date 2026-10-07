@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Clock, Loader2, RotateCcw, ScrollText, Square, Upload } from 'lucide-react'
 import { CandidateCard } from '../components/CandidateCard'
 import { ImageInput } from '../components/ImageInput'
@@ -13,6 +13,10 @@ import { isPdf, loadPdfPage, type PdfTextItem } from '../lib/pdf'
 import { makeSampleInvoice } from '../lib/sample'
 import { useSettings } from '../store/settings'
 import { isPrimary } from '../lib/ocr/aggregate'
+import { useSession } from '../store/session'
+import { checkRequirements } from '../lib/requirements'
+import { RequirementsPanel } from '../components/RequirementsPanel'
+import type { Rect } from '../lib/image'
 
 interface Doc {
   name: string
@@ -28,6 +32,11 @@ export default function ScanPage() {
   const [dragging, setDragging] = useState(false)
   const [hl, setHl] = useState<string | null>(null)
   const showCorrections = useSettings((s) => s.showCorrections)
+  const useJapanese = useSettings((s) => s.useJapanese)
+  const [hlRects, setHlRects] = useState<Rect[] | null>(null)
+  const clearToken = useSession((s) => s.clearToken)
+  const setSessionDoc = useSession((s) => s.setDoc)
+  const setSessionResult = useSession((s) => s.setResult)
 
   const scanDoc = useCallback((d: Doc) => {
     setDoc(d)
@@ -94,6 +103,19 @@ export default function ScanPage() {
     }
   }, [openFile])
 
+  // ヘッダーの「クリア」
+  useEffect(() => {
+    if (clearToken === 0) return
+    reset()
+    setDoc(null)
+    setLoadError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clearToken])
+
+  useEffect(() => {
+    setSessionDoc(!!doc || !!loading)
+  }, [doc, loading, setSessionDoc])
+
   const onSample = () => scanDoc({ name: 'サンプル請求書(架空)', canvas: makeSampleInvoice() })
 
   const scanning = state.status === 'scanning'
@@ -102,6 +124,23 @@ export default function ScanPage() {
   // 主候補(T付き/登録番号付近・検算OK)は最大3件、それ以外は折りたたみ
   const valid = cands.filter(isPrimary).slice(0, 3)
   const invalid = cands.filter((c) => !valid.includes(c)).slice(0, 6)
+  const bestDigits = valid[0]?.digits ?? null
+
+  // ヘッダーの「公表サイト」ボタン用に最有力候補を共有
+  useEffect(() => {
+    setSessionResult(valid[0] ?? null, scanning)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bestDigits, scanning, setSessionResult])
+  useEffect(() => () => setSessionResult(null, false), [setSessionResult])
+
+  // 記載事項チェック(行テキストが得られてから)
+  const textRows = state.textRows
+  const report = useMemo(() => {
+    if (!textRows) return null
+    const weak = state.candidates.find((c) => c.valid && c.context && !c.hasT)
+    const regNo = bestDigits ?? weak?.digits ?? null
+    return checkRequirements(textRows.rows, { regNo, regNoWeak: !bestDigits && !!weak })
+  }, [textRows, bestDigits, state.candidates])
 
   return (
     <div className="space-y-4">
@@ -153,7 +192,7 @@ export default function ScanPage() {
                   </select>
                 )}
               </div>
-              <ScanViewer image={doc.canvas} state={state} highlight={hl} />
+              <ScanViewer image={doc.canvas} state={state} highlight={hl} highlightRects={hlRects} />
               <div className="mt-2"><Legend /></div>
             </div>
             <ImageInput onFile={openFile} onSample={onSample} compact />
@@ -207,6 +246,8 @@ export default function ScanPage() {
                 </details>
               )}
             </section>
+
+            <RequirementsPanel report={report} scanning={scanning} japaneseOff={!useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} onHover={setHlRects} />
 
             <PeekPanel peek={state.peek} />
 

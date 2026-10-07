@@ -55,15 +55,18 @@ export interface Candidate {
   context: boolean
   /** T も文脈も無く、JANコードとしても正しい = 商品コードの可能性 */
   likelyJan: boolean
+  /** 同じ位置により有力な候補がある(その場所の別の読み) */
+  shadowed: boolean
 }
 
 /** T番号として有力か(T付き or 登録番号の近く、かつ商品コードらしくない) */
 export function isPrimary(c: Candidate): boolean {
-  return c.valid && (c.hasT || c.context) && !c.likelyJan
+  return c.valid && (c.hasT || c.context) && !c.likelyJan && !c.shadowed
 }
 
 export function readingWeight(r: Reading): number {
-  const conf = Math.max(0.05, Math.min(1, r.conf / 100))
+  // 数字ホワイトリスト時の Tesseract の信頼度は低く出がちなので、下駄を履かせる
+  const conf = 0.35 + 0.65 * Math.max(0, Math.min(1, r.conf / 100))
   return conf * (r.hasT ? 1.2 : 0.8) * Math.pow(0.7, r.substitutions) * STAGE_WEIGHT[r.stage]
 }
 
@@ -92,7 +95,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
   const add = (digits: string, kind: CandidateKind, w: number, r: Reading | null, note?: string) => {
     let c = map.get(digits)
     if (!c) {
-      c = { digits, valid: isValidDigits(digits), kind, score: 0, confidence: 0, votes: 0, hasT: false, stages: [], rects: [], note, context: false, likelyJan: false }
+      c = { digits, valid: isValidDigits(digits), kind, score: 0, confidence: 0, votes: 0, hasT: false, stages: [], rects: [], note, context: false, likelyJan: false, shadowed: false }
       map.set(digits, c)
     }
     // read > consensus > corrected の優先で種類を更新
@@ -146,6 +149,15 @@ export function aggregate(readings: Reading[]): Candidate[] {
   }
 
   const list = [...map.values()]
+  // 同じ位置で、より強い検算OK候補の半分未満のスコアしかない検算OK候補は「別の読み」扱い
+  const strong = list.filter((c) => c.valid).sort((a, b) => b.score - a.score)
+  for (const c of strong) {
+    const better = strong.find((o) => o !== c && o.score > c.score * 2 && o.rects.some((a) => c.rects.some((b) => overlapRatio(a, b) > 0.5)))
+    if (better) {
+      c.shadowed = true
+      c.note = `同じ位置の別の読み(有力: T${better.digits})`
+    }
+  }
   for (const c of list) {
     const base = 1 - Math.exp(-c.score / 1.5)
     let conf = base * 100
@@ -155,6 +167,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
     if (!c.hasT && !c.context) conf *= 0.4
     else if (!c.hasT) conf *= 0.85
     if (c.likelyJan) conf *= 0.5
+    if (c.shadowed) conf *= 0.4
     c.confidence = Math.round(Math.max(1, Math.min(99, conf)))
   }
   return list.sort((a, b) => Number(isPrimary(b)) - Number(isPrimary(a)) || Number(b.valid) - Number(a.valid) || b.confidence - a.confidence || b.score - a.score)

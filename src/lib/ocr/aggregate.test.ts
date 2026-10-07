@@ -23,6 +23,12 @@ describe('aggregate', () => {
     expect(c[0].digits).toBe(NTA)
     expect(c[0].valid).toBe(true)
   })
+  it('weak valid reading at the same spot is shadowed', () => {
+    const other = '7810643631847'
+    const c = aggregate([r(NTA), r(NTA), r(NTA), { ...r(other), valid: true }])
+    expect(c.find((x) => x.digits === other)?.shadowed).toBe(true)
+    expect(c[0].digits).toBe(NTA)
+  })
   it('consensus from noisy readings', () => {
     const c = aggregate([r('7000012050008'), r('7000012058002'), r('7008012050002')])
     expect(c.find((x) => x.digits === NTA)?.kind).toBe('consensus')
