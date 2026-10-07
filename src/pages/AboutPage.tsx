@@ -7,6 +7,8 @@ const LIBS: [string, string, string][] = [
   ['React Router', 'MIT', 'https://reactrouter.com/'],
   ['Vite', 'MIT', 'https://vite.dev/'],
   ['Tailwind CSS', 'MIT', 'https://tailwindcss.com/'],
+  ['PaddleOCR (PP-OCRv5 モデル)', 'Apache-2.0', 'https://github.com/PaddlePaddle/PaddleOCR'],
+  ['ONNX Runtime Web', 'MIT', 'https://onnxruntime.ai/'],
   ['tesseract.js', 'Apache-2.0', 'https://github.com/naptha/tesseract.js'],
   ['pdf.js (pdfjs-dist)', 'Apache-2.0', 'https://mozilla.github.io/pdf.js/'],
   ['zustand', 'MIT', 'https://github.com/pmndrs/zustand'],

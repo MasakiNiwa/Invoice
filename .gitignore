@@ -1,6 +1,7 @@
 node_modules
 dist
 public/ocr
+public/paddle
 *.log
 .DS_Store
 coverage

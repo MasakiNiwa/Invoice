@@ -5,6 +5,7 @@
  */
 import { createWorker, type Worker } from 'tesseract.js'
 import type { Rect } from '../image'
+import type { OcrBackend } from './engine'
 
 export interface OcrSymbol { text: string; conf: number; rect: Rect }
 export interface OcrWord { text: string; conf: number; rect: Rect; symbols: OcrSymbol[] }
@@ -45,12 +46,15 @@ export class AbortError extends Error {
   }
 }
 
-export class OcrPool {
+export class OcrPool implements OcrBackend {
   private slots: Slot[] = []
   private queue: Job[] = []
   private ready: Promise<void> | null = null
   readonly lang: string
   readonly size: number
+  get label() {
+    return `Tesseract (${this.lang} ×${this.size})`
+  }
   /** 認識中の進捗(0..1)。ワーカー単位で通知される */
   onRecognizeProgress: ((p: number) => void) | null = null
 

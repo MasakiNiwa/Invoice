@@ -17,7 +17,9 @@ import { binarize, connectedComponents, findTextLines, type TextLine } from '../
 import { extractTNumbers, toHalfWidth } from '../tnumber'
 import type { Settings } from '../../store/settings'
 import { aggregate, isConfident, isPrimary, type Candidate, type Reading, type StageId, STAGE_LABEL } from './aggregate'
-import { AbortError, getPool, type OcrParams, type OcrPool, type OcrResult, type OcrWord } from './pool'
+import { AbortError, getPool, type OcrParams, type OcrResult, type OcrWord } from './pool'
+import type { EngineId, OcrBackend } from './engine'
+import { getPaddle } from './paddle'
 
 export type LogLevel = 'info' | 'success' | 'warn' | 'error'
 export type MarkKind = 'word' | 'anchor' | 'textline' | 'tile'
@@ -34,6 +36,7 @@ export type ScanEvent =
   | { type: 'log'; level: LogLevel; message: string; stage?: StageId }
   | { type: 'model'; status: string; progress: number }
   | { type: 'textrows'; source: 'pdf' | 'ocr'; rows: TextRow[] }
+  | { type: 'engine'; engine: EngineId; label: string }
 
 export interface ScanInput {
   canvas: HTMLCanvasElement
@@ -60,6 +63,16 @@ const PLANS: Record<Settings['strength'], Plan> = {
   quick: { layoutMaxSide: 2000, maxAnchorRois: 6, targetHeights: [52], variants: ['contrast'], maxTextlines: 6, tileLevels: [], tileVariants: ['contrast'] },
   standard: { layoutMaxSide: 2800, maxAnchorRois: 12, targetHeights: [48, 64], variants: ['contrast', 'adaptive'], maxTextlines: 12, tileLevels: [2, 3], tileVariants: ['contrast'] },
   thorough: { layoutMaxSide: 3600, maxAnchorRois: 24, targetHeights: [36, 52, 72], variants: ['contrast', 'adaptive', 'binary'], maxTextlines: 30, tileLevels: [2, 3, 4], tileVariants: ['contrast', 'adaptive'] },
+}
+
+/**
+ * PaddleOCR 用: 認識器は行画像を高さ48pxに正規化するので倍率違いは不要、
+ * 全体解析で行をほぼ取りこぼさないため、タイル走査は徹底時のみ。
+ */
+const PADDLE_PLANS: Record<Settings['strength'], Plan> = {
+  quick: { layoutMaxSide: 1600, maxAnchorRois: 6, targetHeights: [48], variants: ['contrast'], maxTextlines: 4, tileLevels: [], tileVariants: ['contrast'] },
+  standard: { layoutMaxSide: 2400, maxAnchorRois: 12, targetHeights: [48], variants: ['contrast', 'gray'], maxTextlines: 8, tileLevels: [], tileVariants: ['contrast'] },
+  thorough: { layoutMaxSide: 3200, maxAnchorRois: 24, targetHeights: [40, 64], variants: ['contrast', 'gray'], maxTextlines: 20, tileLevels: [2], tileVariants: ['contrast'] },
 }
 
 const STAGE_SPAN: Record<StageId, [number, number]> = {
@@ -174,7 +187,6 @@ export async function runScan(
   const src = input.canvas
   const W = src.width
   const H = src.height
-  const plan = PLANS[settings.strength]
   const readings: Reading[] = []
   let focusId = 0
   let candidates: Candidate[] = []
@@ -206,20 +218,38 @@ export async function runScan(
   const confident = () => settings.earlyExit && isConfident(candidates)
 
   // ---------- モデル準備 ----------
-  const layoutLang = settings.useJapanese ? 'jpn+eng' : 'eng'
-  const layoutPool = getPool(layoutLang, 1)
-  const digitPool = getPool('eng', settings.workers)
-  log('info', `OCRモデルを準備中(${layoutLang} / 数字用 eng ×${settings.workers})…初回はダウンロードに時間がかかります`)
   emit({ type: 'progress', value: 0.01, label: 'OCRモデル準備' })
-  await Promise.all([
-    layoutPool.init((status, p) => emit({ type: 'model', status, progress: p })),
-    digitPool.init(),
-  ])
+  const onModel = (status: string, p: number) => emit({ type: 'model', status, progress: p })
+  let engine: EngineId = settings.engine
+  let layoutPool!: OcrBackend
+  let digitPool!: OcrBackend
+  if (engine === 'paddle') {
+    const paddle = getPaddle(settings.paddleBackend)
+    log('info', 'PaddleOCR(PP-OCRv5)を準備中…初回はモデル(約50MB)のダウンロードに時間がかかります')
+    try {
+      await paddle.init(onModel)
+      layoutPool = digitPool = paddle
+    } catch (e) {
+      console.error(e)
+      log('warn', `PaddleOCR を起動できなかったため Tesseract に切り替えます: ${(e as Error).message}`)
+      engine = 'tesseract'
+    }
+  }
+  if (engine === 'tesseract') {
+    const layoutLang = settings.useJapanese ? 'jpn+eng' : 'eng'
+    layoutPool = getPool(layoutLang, 1)
+    digitPool = getPool('eng', settings.workers)
+    log('info', `Tesseract を準備中(${layoutLang} / 数字用 eng ×${settings.workers})…初回はダウンロードに時間がかかります`)
+    await Promise.all([layoutPool.init(onModel), digitPool.init()])
+  }
   check()
   emit({ type: 'model', status: 'ready', progress: 1 })
+  emit({ type: 'engine', engine, label: layoutPool.label })
+  log('info', `OCRエンジン: ${layoutPool.label}`)
+  const plan = (engine === 'paddle' ? PADDLE_PLANS : PLANS)[settings.strength]
 
   /** 切り出し → 前処理 → OCR → 読み取り登録 */
-  const readCrop = async (pool: OcrPool, rect: Rect, scale: number, mode: Preprocess, params: OcrParams, stage: StageId, label: string) => {
+  const readCrop = async (pool: OcrBackend, rect: Rect, scale: number, mode: Preprocess, params: OcrParams, stage: StageId, label: string) => {
     check()
     const r = clampRect(rect, W, H)
     const pad = 16
@@ -303,7 +333,8 @@ export async function runScan(
     emit({ type: 'stage', stage: 'layout', status: 'start' })
     // 大きい画像は縮小、小さい画像(スクショ等)は拡大して、日本語の文字が読める大きさにする
     const long = Math.max(W, H)
-    const s = Math.min(plan.layoutMaxSide / long, Math.max(1, Math.min(2.5, 2400 / long)))
+    // (PaddleOCR は検出時に内部で縮小するので拡大しない)
+    const s = engine === 'paddle' ? Math.min(1, plan.layoutMaxSide / long) : Math.min(plan.layoutMaxSide / long, Math.max(1, Math.min(2.5, 2400 / long)))
     log('info', `全体を ${Math.round(W * s)}×${Math.round(H * s)}px でレイアウト解析`, 'layout')
     progress('layout', 0)
     layoutPool.onRecognizeProgress = (p) => progress('layout', p * 0.95)
