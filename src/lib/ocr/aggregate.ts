@@ -3,7 +3,7 @@ import type { Rect } from '../image'
 import { overlapRatio } from '../image'
 import { isValidDigits, isValidEan13, suggestCorrections } from '../tnumber'
 
-export type StageId = 'pdf' | 'layout' | 'anchor' | 'textline' | 'tile'
+export type StageId = 'pdf' | 'layout' | 'anchor' | 'textline' | 'tile' | 'detail'
 
 export const STAGE_LABEL: Record<StageId, string> = {
   pdf: 'PDFテキスト層',
@@ -11,6 +11,7 @@ export const STAGE_LABEL: Record<StageId, string> = {
   anchor: 'アンカー周辺精査',
   textline: '文字列らしさ検出',
   tile: 'タイル走査',
+  detail: '記載事項精査',
 }
 
 const STAGE_WEIGHT: Record<StageId, number> = {
@@ -19,6 +20,7 @@ const STAGE_WEIGHT: Record<StageId, number> = {
   anchor: 1.3,
   textline: 1.15,
   tile: 0.9,
+  detail: 1.1,
 }
 
 export interface Reading {

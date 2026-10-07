@@ -188,8 +188,8 @@ export default function ScanPage() {
       {!doc && !loading && (
         <>
           <section className="pt-2 text-center sm:pt-6">
-            <h1 className="text-2xl font-bold sm:text-3xl">インボイスの登録番号を<span className="text-teal-600">読み取って検算</span></h1>
-            <p className="mt-2 text-sm text-slate-500">適格請求書の「T + 13桁」を画像から探し出し、チェックディジットで確認。国税庁の公表サイトへすぐ飛べます。</p>
+            <h1 className="text-2xl font-bold sm:text-3xl">インボイス要件と登録番号を<span className="text-teal-600">チェック</span></h1>
+            <p className="mt-2 text-sm text-slate-500">適格請求書の「T + 13桁」を画像から探し出してチェックディジットで検算し、記載事項がそろっているかも確認。国税庁の公表サイトへすぐ飛べます。</p>
           </section>
           <ImageInput onFile={openFile} onSample={onSample} />
           <div className="flex justify-center"><EngineBadge /></div>
@@ -302,7 +302,7 @@ export default function ScanPage() {
               )}
             </section>
 
-            <RequirementsPanel report={report} scanning={scanning} japaneseOff={state.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} onHover={setHlRects} />
+            <RequirementsPanel report={report} scanning={scanning} japaneseOff={state.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} refined={textRows?.refined} onHover={setHlRects} />
 
             <PeekPanel peek={state.peek} />
 

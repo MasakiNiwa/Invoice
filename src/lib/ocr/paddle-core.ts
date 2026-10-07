@@ -136,7 +136,8 @@ export class PaddleCore {
       const order = boxes.map((b, i) => ({ b, i, r: b.w / Math.max(1, b.h) })).sort((a, b) => a.r - b.r)
       for (let i = 0; i < order.length; i += B) {
         const batch = order.slice(i, i + B).map((o) => o.b)
-        const rs = await this.recBatch(bmp, batch)
+        // 認識は検出枠より少し広めに切り出す(枠ぴったりだとカタカナ等の取りこぼしが多い)
+        const rs = await this.recBatch(bmp, batch.map((b) => padRect(b, img.width, img.height, params.recPadY ?? 0.3, params.recPadX ?? 0.5)))
         rs.forEach((r, k) => {
           if (r.text.trim()) lines.push(toLine(r.text, r.conf, batch[k], r.symbols))
         })
@@ -266,6 +267,14 @@ export class PaddleCore {
       return { text, conf, symbols }
     })
   }
+}
+
+function padRect(r: Rect, W: number, H: number, py: number, px: number): Rect {
+  const x0 = Math.max(0, r.x - r.h * px)
+  const y0 = Math.max(0, r.y - r.h * py)
+  const x1 = Math.min(W, r.x + r.w + r.h * px)
+  const y1 = Math.min(H, r.y + r.h + r.h * py)
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
 function toLine(text: string, conf: number, rect: Rect, symbols: OcrSymbol[]): OcrLine {

@@ -5,7 +5,7 @@ import { STAGES } from '../lib/ocr/pipeline'
 
 export function StageStepper({ state }: { state: ScanState }) {
   return (
-    <ol className="grid grid-cols-5 gap-1">
+    <ol className="grid grid-cols-6 gap-1">
       {STAGES.map((id, i) => {
         const st = state.stages[id]
         const color =

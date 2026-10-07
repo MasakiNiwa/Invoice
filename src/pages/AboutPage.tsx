@@ -39,7 +39,6 @@ export default function AboutPage() {
         </dl>
         <div className="flex flex-wrap justify-center gap-2">
           <a className="btn-primary" href={REPO_URL} target="_blank" rel="noreferrer"><Github size={16} /> GitHub リポジトリ</a>
-          <a className="btn-ghost" href={`${REPO_URL}/releases`} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 更新履歴</a>
           <a className="btn-ghost" href={`${REPO_URL}/issues`} target="_blank" rel="noreferrer"><ExternalLink size={16} /> 不具合・要望</a>
         </div>
         <p className="text-xs text-slate-400">公開URL: <a className="underline" href={PAGES_URL}>{PAGES_URL}</a></p>

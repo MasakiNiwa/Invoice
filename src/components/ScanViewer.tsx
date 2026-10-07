@@ -9,6 +9,7 @@ const STAGE_COLOR: Record<StageId, string> = {
   anchor: '#f59e0b',
   textline: '#a855f7',
   tile: '#14b8a6',
+  detail: '#ec4899',
 }
 
 interface Props {
@@ -77,6 +78,11 @@ export function ScanViewer({ image, state, highlight, highlightRects, overlay }:
       ctx.strokeStyle = 'rgba(168,85,247,0.75)'
       ctx.fillStyle = 'rgba(168,85,247,0.08)'
       for (const r of s.marks.textline) { ctx.fillRect(...R(r)); ctx.strokeRect(...R(r)) }
+      // 記載事項精査の対象行
+      ctx.setLineDash([lw * 2, lw * 2])
+      ctx.strokeStyle = 'rgba(236,72,153,0.7)'
+      for (const r of s.marks.detail) ctx.strokeRect(...R(r))
+      ctx.setLineDash([])
       // アンカー
       ctx.strokeStyle = 'rgba(245,158,11,0.95)'
       ctx.fillStyle = 'rgba(245,158,11,0.15)'
@@ -181,6 +187,7 @@ export function Legend() {
     ['#f59e0b', 'アンカー(T・登録番号)'],
     ['#a855f7', '文字が並ぶ領域'],
     ['#14b8a6', 'タイル走査'],
+    ['#ec4899', '記載事項の精査'],
     ['#10b981', 'T番号(検算OK)'],
   ]
   return (

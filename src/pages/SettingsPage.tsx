@@ -98,6 +98,9 @@ export default function SettingsPage() {
             <span className="w-6 text-center font-mono text-sm">{s.workers}</span>
           </div>
         </Row>
+        <Row title="記載事項の精査" desc="日付・金額・税率・宛名などの行を拡大して何度も読み直し、多数決で記載事項チェックの精度を上げます(少し時間がかかります)">
+          <Toggle checked={s.refineRequirements} onChange={(v) => s.set({ refineRequirements: v })} />
+        </Row>
         <Row title="推定補正候補を表示" desc="検算NGの読み取りを、誤認しやすい数字の1桁置換で補正した候補も表示します">
           <Toggle checked={s.showCorrections} onChange={(v) => s.set({ showCorrections: v })} />
         </Row>

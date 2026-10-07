@@ -17,6 +17,9 @@ export interface OcrParams {
   whitelist?: string
   /** 文字行の位置だけ求める(PaddleOCR のみ。認識を省略して高速) */
   detectOnly?: boolean
+  /** PaddleOCR: 検出枠を広げて認識する余白(行の高さに対する比率) */
+  recPadY?: number
+  recPadX?: number
 }
 
 interface Slot {
