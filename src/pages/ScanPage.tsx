@@ -12,6 +12,7 @@ import { blobToCanvas } from '../lib/image'
 import { isPdf, loadPdfPage, type PdfTextItem } from '../lib/pdf'
 import { makeSampleInvoice } from '../lib/sample'
 import { useSettings } from '../store/settings'
+import { isPrimary } from '../lib/ocr/aggregate'
 
 interface Doc {
   name: string
@@ -98,8 +99,9 @@ export default function ScanPage() {
   const scanning = state.status === 'scanning'
   const elapsed = ((state.finishedAt || (scanning ? performance.now() : state.startedAt)) - state.startedAt) / 1000
   const cands = state.candidates.filter((c) => showCorrections || c.kind !== 'corrected')
-  const valid = cands.filter((c) => c.valid)
-  const invalid = cands.filter((c) => !c.valid).slice(0, 4)
+  // 主候補(T付き/登録番号付近・検算OK)は最大3件、それ以外は折りたたみ
+  const valid = cands.filter(isPrimary).slice(0, 3)
+  const invalid = cands.filter((c) => !valid.includes(c)).slice(0, 6)
 
   return (
     <div className="space-y-4">
@@ -193,12 +195,12 @@ export default function ScanPage() {
               {valid.map((c, i) => <CandidateCard key={c.digits} c={c} rank={i} onHover={setHl} />)}
               {valid.length === 0 && !scanning && state.status === 'done' && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                  検算OKのT番号が見つかりませんでした。設定で「スキャン強度: 徹底」にする、明るく正面から撮り直す、番号部分を拡大したスクショを貼る、などをお試しください。
+                  T番号として有力な候補が見つかりませんでした。設定で「スキャン強度: 徹底」にする、明るく正面から撮り直す、番号部分を拡大したスクショを貼る、などをお試しください。
                 </div>
               )}
               {invalid.length > 0 && (
                 <details className="group" open={valid.length === 0}>
-                  <summary className="cursor-pointer text-xs text-slate-500">検算NGの候補 {invalid.length} 件(誤読の可能性)</summary>
+                  <summary className="cursor-pointer text-xs text-slate-500">その他の候補 {invalid.length} 件(検算NG・T未検出・商品コードの可能性など)</summary>
                   <div className="mt-2 space-y-2">
                     {invalid.map((c, i) => <CandidateCard key={c.digits} c={c} rank={i + valid.length} onHover={setHl} />)}
                   </div>

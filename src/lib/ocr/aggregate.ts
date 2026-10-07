@@ -1,7 +1,7 @@
 /** 読み取り結果(reading)を候補(candidate)に集計する。純粋関数。 */
 import type { Rect } from '../image'
 import { overlapRatio } from '../image'
-import { isValidDigits, suggestCorrections } from '../tnumber'
+import { isValidDigits, isValidEan13, suggestCorrections } from '../tnumber'
 
 export type StageId = 'pdf' | 'layout' | 'anchor' | 'textline' | 'tile'
 
@@ -33,6 +33,8 @@ export interface Reading {
   raw: string
   /** 補足(前処理・倍率など) */
   detail?: string
+  /** 「登録番号」や T のアンカー付近で読めたか */
+  context?: boolean
 }
 
 export type CandidateKind = 'read' | 'consensus' | 'corrected'
@@ -49,6 +51,15 @@ export interface Candidate {
   stages: StageId[]
   rects: Rect[]
   note?: string
+  /** アンカー(登録番号・T)付近で読めた */
+  context: boolean
+  /** T も文脈も無く、JANコードとしても正しい = 商品コードの可能性 */
+  likelyJan: boolean
+}
+
+/** T番号として有力か(T付き or 登録番号の近く、かつ商品コードらしくない) */
+export function isPrimary(c: Candidate): boolean {
+  return c.valid && (c.hasT || c.context) && !c.likelyJan
 }
 
 export function readingWeight(r: Reading): number {
@@ -81,7 +92,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
   const add = (digits: string, kind: CandidateKind, w: number, r: Reading | null, note?: string) => {
     let c = map.get(digits)
     if (!c) {
-      c = { digits, valid: isValidDigits(digits), kind, score: 0, confidence: 0, votes: 0, hasT: false, stages: [], rects: [], note }
+      c = { digits, valid: isValidDigits(digits), kind, score: 0, confidence: 0, votes: 0, hasT: false, stages: [], rects: [], note, context: false, likelyJan: false }
       map.set(digits, c)
     }
     // read > consensus > corrected の優先で種類を更新
@@ -91,6 +102,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
     if (r) {
       if (kind === 'read') c.votes++
       c.hasT ||= r.hasT
+      c.context ||= !!r.context
       if (!c.stages.includes(r.stage)) c.stages.push(r.stage)
       mergeRects(c.rects, r.rect)
     }
@@ -109,7 +121,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
     const c = consensusOf(g)
     if (c && isValidDigits(c) && !g.some((r) => r.digits === c)) {
       const w = g.reduce((s, r) => s + readingWeight(r), 0) * 0.5
-      add(c, 'consensus', w, { ...g[0], digits: c, hasT: g.some((r) => r.hasT) }, `${g.length}件の読み取りを桁ごとに多数決`)
+      add(c, 'consensus', w, { ...g[0], digits: c, hasT: g.some((r) => r.hasT), context: g.some((r) => r.context) }, `${g.length}件の読み取りを桁ごとに多数決`)
     }
   }
 
@@ -117,6 +129,8 @@ export function aggregate(readings: Reading[]): Candidate[] {
   const validCands = [...map.values()].filter((c) => c.valid)
   for (const c of [...map.values()]) {
     if (c.valid || c.kind !== 'read') continue
+    // 補正は T 付き or 文脈ありの読み取りに限る(商品コード等からの誤補正を防ぐ)
+    if (!c.hasT && !c.context) continue
     const nearValid = validCands.some((v) => v.rects.some((a) => c.rects.some((b) => overlapRatio(a, b) > 0.3)))
     if (nearValid) continue
     const fixes = suggestCorrections(c.digits)
@@ -125,6 +139,7 @@ export function aggregate(readings: Reading[]): Candidate[] {
       add(f.digits, 'corrected', (c.score * 0.35) / fixes.length, null, `${f.position + 1}桁目 ${f.from}→${f.to} と推定`)
       const nc = map.get(f.digits)!
       nc.hasT ||= c.hasT
+      nc.context ||= c.context
       for (const s of c.stages) if (!nc.stages.includes(s)) nc.stages.push(s)
       for (const r of c.rects) mergeRects(nc.rects, r)
     }
@@ -136,10 +151,13 @@ export function aggregate(readings: Reading[]): Candidate[] {
     let conf = base * 100
     if (!c.valid) conf *= 0.35
     if (c.kind === 'corrected') conf *= 0.5
-    if (!c.hasT) conf *= 0.85
+    c.likelyJan = !c.hasT && !c.context && isValidEan13(c.digits)
+    if (!c.hasT && !c.context) conf *= 0.4
+    else if (!c.hasT) conf *= 0.85
+    if (c.likelyJan) conf *= 0.5
     c.confidence = Math.round(Math.max(1, Math.min(99, conf)))
   }
-  return list.sort((a, b) => Number(b.valid) - Number(a.valid) || b.confidence - a.confidence || b.score - a.score)
+  return list.sort((a, b) => Number(isPrimary(b)) - Number(isPrimary(a)) || Number(b.valid) - Number(a.valid) || b.confidence - a.confidence || b.score - a.score)
 }
 
 /** 早期終了してよいほど確からしい候補があるか */

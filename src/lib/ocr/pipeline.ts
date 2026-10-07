@@ -15,7 +15,7 @@ import type { PdfTextItem } from '../pdf'
 import { binarize, connectedComponents, findTextLines } from '../textlines'
 import { extractTNumbers, toHalfWidth } from '../tnumber'
 import type { Settings } from '../../store/settings'
-import { aggregate, isConfident, type Candidate, type Reading, type StageId, STAGE_LABEL } from './aggregate'
+import { aggregate, isConfident, isPrimary, type Candidate, type Reading, type StageId, STAGE_LABEL } from './aggregate'
 import { AbortError, getPool, type OcrParams, type OcrPool, type OcrResult, type OcrWord } from './pool'
 
 export type LogLevel = 'info' | 'success' | 'warn' | 'error'
@@ -156,8 +156,11 @@ export async function runScan(
     const [a, b] = STAGE_SPAN[stage]
     emit({ type: 'progress', value: a + (b - a) * Math.max(0, Math.min(1, frac)), label: STAGE_LABEL[stage] })
   }
+  /** 「登録番号」や T の周辺(文脈)領域 */
+  const contextRects: Rect[] = []
   const addReadings = (rs: Reading[]) => {
     if (rs.length === 0) return
+    for (const r of rs) r.context ||= r.stage === 'anchor' || contextRects.some((c) => overlapRatio(c, r.rect) > 0.5)
     const before = new Set(candidates.filter((c) => c.valid).map((c) => c.digits))
     for (const r of rs) {
       readings.push(r)
@@ -166,7 +169,7 @@ export async function runScan(
     candidates = aggregate(readings)
     emit({ type: 'candidates', candidates })
     for (const c of candidates) {
-      if (c.valid && !before.has(c.digits)) log('success', `検算OKの候補を発見: T${c.digits}`, rs[0].stage)
+      if (isPrimary(c) && !before.has(c.digits)) log('success', `検算OKの候補を発見: T${c.digits}`, rs[0].stage)
     }
   }
   const confident = () => settings.earlyExit && isConfident(candidates)
@@ -264,7 +267,7 @@ export async function runScan(
     emit({ type: 'stage', stage: 'layout', status: 'skip', note: 'テキスト層で確定' })
   } else {
     emit({ type: 'stage', stage: 'layout', status: 'start' })
-    const { canvas: small, scale: s } = downscale(src, 2400)
+    const { canvas: small, scale: s } = downscale(src, 3600)
     log('info', `全体を ${small.width}×${small.height}px でレイアウト解析`, 'layout')
     progress('layout', 0)
     layoutPool.onRecognizeProgress = (p) => progress('layout', p * 0.95)
@@ -295,6 +298,7 @@ export async function runScan(
       if (r.w < 4 || r.h < 4) return
       if (anchorRois.some((a) => overlapRatio(a.rect, r) > 0.75)) return
       anchorRois.push({ rect: r, h, label })
+      contextRects.push(r)
     }
     for (const row of layoutRows) {
       const rowH = median(row.words.map((w) => w.rect.h)) || charH
@@ -348,14 +352,18 @@ export async function runScan(
     emit({ type: 'stage', stage: 'textline', status: 'start' })
     const { canvas: small, scale: s } = downscale(src, 2000)
     const gray = toGray(small)
-    const bin = binarize(gray, otsuThreshold(gray))
-    const cc = connectedComponents(bin, small.width, small.height)
-    const lines = findTextLines(cc, { minChars: 11, maxChars: 26, minCharHeight: 5, maxCharHeight: small.height / 8 })
+    const th = otsuThreshold(gray)
+    // 通常(黒文字)と反転(白抜き文字)の両方で連結成分を求める
+    const cc = connectedComponents(binarize(gray, th), small.width, small.height)
+    const ccInv = connectedComponents(binarize(gray, th, true), small.width, small.height)
+    const lineOpts = { minChars: 11, maxChars: 26, minCharHeight: 5, maxCharHeight: small.height / 8 }
+    const lines = [...findTextLines(cc, lineOpts), ...findTextLines(ccInv, lineOpts)]
+      .sort((a, b) => b.score - a.score)
       .map((l) => ({ ...l, x: l.x / s, y: l.y / s, w: l.w / s, h: l.h / s, charHeight: l.charHeight / s }))
       .filter((l) => !anchorRois.some((a) => overlapRatio(a.rect, l) > 0.85))
     const picked = lines.filter((l) => l.score > 0.3).slice(0, plan.maxTextlines)
     emit({ type: 'marks', kind: 'textline', rects: picked })
-    log('info', `連結成分 ${cc.length} 個から、文字が並ぶ領域を ${lines.length} 個検出 → 上位 ${picked.length} 個を精査`, 'textline')
+    log('info', `連結成分 ${cc.length + ccInv.length} 個から、文字が並ぶ領域を ${lines.length} 個検出 → 上位 ${picked.length} 個を精査`, 'textline')
     const jobs = picked.flatMap((l) =>
       plan.variants.slice(0, 2).map((v) => () => {
         const h = l.charHeight
@@ -371,7 +379,7 @@ export async function runScan(
   // ---------- Stage 4: タイル走査 ----------
   check()
   let levels = plan.tileLevels
-  if (levels.length === 0 && !candidates.some((c) => c.valid)) levels = [2]
+  if (levels.length === 0 && !candidates.some(isPrimary)) levels = [2]
   if (confident() || levels.length === 0) {
     emit({ type: 'stage', stage: 'tile', status: 'skip', note: confident() ? '確定済み' : '不要' })
   } else {
@@ -402,8 +410,8 @@ export async function runScan(
   }
   progress('tile', 1)
 
-  const valid = candidates.filter((c) => c.valid)
-  if (valid.length) log('success', `完了: 検算OKの候補 ${valid.length} 件(最有力 T${valid[0].digits})`)
+  const valid = candidates.filter(isPrimary)
+  if (valid.length) log('success', `完了: T番号の候補 ${valid.length} 件(最有力 T${valid[0].digits})`)
   else if (candidates.length) log('warn', '完了: 検算OKの候補はありませんでした。画像の向き・解像度をご確認ください')
   else log('warn', '完了: T番号らしい文字列は見つかりませんでした')
   emit({ type: 'progress', value: 1, label: '完了' })

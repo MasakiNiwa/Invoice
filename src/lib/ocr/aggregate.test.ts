@@ -8,6 +8,16 @@ const r = (digits: string, extra: Partial<Reading> = {}): Reading => ({
 })
 
 describe('aggregate', () => {
+  it('JAN-like number without T is not primary', () => {
+    // 4901234567894 は JAN として正しい。T番号の検算もたまたま通る場合のみ有効候補になるが、主候補にはしない
+    const c = aggregate([r(NTA), { ...r('4901234567894'), hasT: false, stage: 'tile' }])
+    expect(c[0].digits).toBe(NTA)
+    expect(c.find((x) => x.digits === '4901234567894')?.likelyJan).toBe(true)
+  })
+  it('no corrections from context-less readings', () => {
+    const c = aggregate([{ ...r('7000012050008'), hasT: false }])
+    expect(c.some((x) => x.kind === 'corrected')).toBe(false)
+  })
   it('valid candidate ranks first', () => {
     const c = aggregate([r('7000012050008'), r('7000012050008'), r(NTA)])
     expect(c[0].digits).toBe(NTA)

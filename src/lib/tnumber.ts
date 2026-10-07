@@ -209,6 +209,14 @@ export function suggestCorrections(digits13: string, lowConfidencePositions?: nu
   return out
 }
 
+/** JAN(EAN-13)コードとして正しいか(商品コードとの取り違え判定用) */
+export function isValidEan13(digits13: string): boolean {
+  if (!/^\d{13}$/.test(digits13)) return false
+  let sum = 0
+  for (let i = 0; i < 12; i++) sum += (digits13.charCodeAt(i) - 48) * (i % 2 === 0 ? 1 : 3)
+  return (10 - (sum % 10)) % 10 === digits13.charCodeAt(12) - 48
+}
+
 /** 表示用: T1234-5678-9012-3 */
 export function formatTNumber(digits13: string): string {
   if (!/^\d{13}$/.test(digits13)) return `T${digits13}`

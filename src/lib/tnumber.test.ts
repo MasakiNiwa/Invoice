@@ -4,6 +4,7 @@ import {
   extractTNumbers,
   formatTNumber,
   isValidDigits,
+  isValidEan13,
   parseManualInput,
   suggestCorrections,
   toHalfWidth,
@@ -77,6 +78,10 @@ describe('suggestCorrections', () => {
 })
 
 describe('misc', () => {
+  it('ean13', () => {
+    expect(isValidEan13('4901234567894')).toBe(true)
+    expect(isValidEan13('4901234567890')).toBe(false)
+  })
   it('format', () => expect(formatTNumber(NTA)).toBe('T7 0000 1205 0002'))
   it('halfwidth', () => expect(toHalfWidth('Ｔ１ー２')).toBe('T1-2'))
   it('manual input', () => {
