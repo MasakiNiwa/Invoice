@@ -129,7 +129,7 @@ export class PaddleCore {
       // 全体解析は呼び出し側で解像度を決めている(スキャン強度)ので、ここでは上限だけ設ける
       const maxSide = params.psm === '3' ? 3200 : 1600
       const boxes = await this.detect(bmp, maxSide)
-      if (params.detectOnly) return { text: '', conf: 0, lines: boxes.map((b) => toLine('', 0, b, [])) }
+      if (params.detectOnly) return { text: '', conf: 0, lines: boxes.map((b) => ({ ...toLine('', 0, b, []), angle: b.angle, elongation: b.elongation })) }
       const lines: OcrLine[] = []
       const B = 8
       // 幅の近い行をまとめるとパディングが減って速い
@@ -152,7 +152,7 @@ export class PaddleCore {
   }
 
   /** DBNet による文字行の検出。返り値は画像座標の矩形 */
-  private async detect(image: ImageBitmap, maxSide: number): Promise<Rect[]> {
+  private async detect(image: ImageBitmap, maxSide: number): Promise<(Rect & { angle: number; elongation: number })[]> {
     const ratio = Math.min(1, maxSide / Math.max(image.width, image.height))
     const w = Math.max(32, Math.round((image.width * ratio) / 32) * 32)
     const h = Math.max(32, Math.round((image.height * ratio) / 32) * 32)
@@ -177,29 +177,48 @@ export class PaddleCore {
     const comps = connectedComponents(bin, w, h)
     const sx = image.width / w
     const sy = image.height / h
-    const rects: Rect[] = []
+    const rects: (Rect & { angle: number; elongation: number })[] = []
     for (const cp of comps) {
       if (cp.w < 3 || cp.h < 3) continue
-      // 枠内の平均確率(box_thresh 0.6)
+      // 枠内の平均確率(box_thresh 0.6)と、画素の分布(主成分)から文字行の傾き
       let s = 0
       let n = 0
+      let mx = 0
+      let my = 0
+      let mxx = 0
+      let myy = 0
+      let mxy = 0
       for (let y = cp.y; y < cp.y + cp.h; y++) {
         for (let x = cp.x; x < cp.x + cp.w; x++) {
           const v = prob[y * w + x]
           if (v > 0.3) {
             s += v
             n++
+            mx += x
+            my += y
+            mxx += x * x
+            myy += y * y
+            mxy += x * y
           }
         }
       }
       if (n === 0 || s / n < 0.6) continue
+      mx /= n
+      my /= n
+      const cxx = mxx / n - mx * mx
+      const cyy = myy / n - my * my
+      const cxy = mxy / n - mx * my
+      const angle = (0.5 * Math.atan2(2 * cxy, cxx - cyy) * 180) / Math.PI
+      const l1 = (cxx + cyy) / 2 + Math.sqrt(((cxx - cyy) / 2) ** 2 + cxy * cxy)
+      const l2 = (cxx + cyy) / 2 - Math.sqrt(((cxx - cyy) / 2) ** 2 + cxy * cxy)
+      const elongation = Math.sqrt(l1 / Math.max(1e-6, l2))
       // unclip: 面積×比率/周長 だけ外側に広げる(DB は縮めた領域を予測するため)
       const d = (cp.w * cp.h * 1.5) / (2 * (cp.w + cp.h))
       const x0 = Math.max(0, (cp.x - d) * sx)
       const y0 = Math.max(0, (cp.y - d) * sy)
       const x1 = Math.min(image.width, (cp.x + cp.w + d) * sx)
       const y1 = Math.min(image.height, (cp.y + cp.h + d) * sy)
-      rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+      rects.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, angle, elongation })
     }
     return rects
   }

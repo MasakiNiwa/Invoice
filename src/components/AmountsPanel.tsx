@@ -3,7 +3,7 @@ import { Calculator, CheckCircle2, TriangleAlert } from 'lucide-react'
 import type { Rect } from '../lib/image'
 import { sumSelected, type AmountSummary } from '../lib/amounts'
 
-const KIND_LABEL = { item: '明細', total: '合計', tax: '税', other: 'その他' } as const
+const KIND_LABEL = { item: '明細', total: '合計', tax: '税', payment: '支払', other: 'その他' } as const
 
 interface Props {
   amounts: AmountSummary | null
@@ -51,6 +51,19 @@ export function AmountsPanel({ amounts, title, onHover }: Props) {
           )}
         </div>
       </div>
+      {amounts.table && (
+        <p
+          className="mb-2 text-[11px] text-slate-500"
+          onMouseEnter={() => onHover?.([amounts.table!.amountRect])}
+          onMouseLeave={() => onHover?.(null)}
+        >
+          表として読み取り: 数値の列 {amounts.table.columns.length} 列。金額は
+          <span className="mx-1 rounded bg-teal-50 px-1 font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">
+            {amounts.table.columns[amounts.table.amountCol].header ?? '右端'}
+          </span>
+          の列から取っています(数量・単価・日付の数字は含めません)
+        </p>
+      )}
       <ul className="max-h-72 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200 text-xs dark:divide-slate-800 dark:border-slate-800">
         {items.map((it, i) => (
           <li key={i} onMouseEnter={() => onHover?.([it.rect])} onMouseLeave={() => onHover?.(null)}>

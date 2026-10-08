@@ -70,6 +70,11 @@ export default function SettingsPage() {
           </Row>
         )}
         {s.engine === 'paddle' && (
+          <Row title="書類の分割と傾き補正" desc="1枚の写真・スキャンに写った複数の領収書を見つけて分け、それぞれ90°単位の向きと細かな傾き(0.2°単位)を直してから読み取ります">
+            <Toggle checked={s.splitDocuments} onChange={(v) => s.set({ splitDocuments: v })} />
+          </Row>
+        )}
+        {s.engine === 'paddle' && (
           <Row title="向きの自動補正" desc="横向き・上下逆の写真を自動で回転してから読み取ります">
             <Toggle checked={s.autoRotate} onChange={(v) => s.set({ autoRotate: v })} />
           </Row>

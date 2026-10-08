@@ -42,6 +42,12 @@ describe('amounts', () => {
     const b = extractAmounts(rows('文具 ¥1,000', '※お茶 ¥216', '10%対象 ¥1,000', '消費税(10%) ¥100', '8%対象 ¥200', '消費税(8%) ¥16', '合言十 ¥1,316'))
     expect(b.docTotal).toBe(1316)
   })
+  it('receipt without a total line: payment is the total, balance is ignored', () => {
+    const a = extractAmounts(rows('領収書', '¥40', '(税率10%対象 ¥40)', '(内消費税等10% ¥3)', '但しプリント代として', 'nanaco支払 ¥40', 'nanaco番号 ****3647', 'nanaco残高 ¥275'))
+    expect(a.docTotal).toBe(40)
+    expect(a.itemsSum).toBe(40)
+    expect(a.match).toBe('equal')
+  })
   it('detects mismatch', () => {
     expect(extractAmounts(rows('A ¥100', 'B ¥200', '合計 ¥500')).match).toBe('diff')
   })

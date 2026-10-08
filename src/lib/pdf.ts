@@ -24,11 +24,30 @@ export interface PdfTextItem {
   rect: Rect
 }
 
+export interface PdfFontInfo {
+  name: string
+  embedded: boolean
+  /** 代わりに使われた表示用フォント */
+  fallback?: string
+}
+
+/** 表示・読み取りがうまくいかないときの手がかり */
+export interface PdfDiagnostics {
+  fonts: PdfFontInfo[]
+  textItems: number
+  /** テキスト層の文字数 */
+  textChars: number
+  /** ページの描画で色が付いた割合(0 に近いと真っ白) */
+  inkRatio: number
+  encrypted?: boolean
+}
+
 export interface PdfPage {
   canvas: HTMLCanvasElement
   textItems: PdfTextItem[]
   pageNumber: number
   numPages: number
+  diag: PdfDiagnostics
 }
 
 export function isPdf(file: Blob & { name?: string }): boolean {
@@ -56,6 +75,8 @@ export async function openPdf(file: Blob): Promise<OpenedPdf> {
     standardFontDataUrl: `${base}standard_fonts/`,
     wasmUrl: `${base}wasm/`,
     useSystemFonts: true,
+    // 診断表示のためフォント名などを保持
+    fontExtraProperties: true,
   })
   const doc = await task.promise
   return {
@@ -102,6 +123,31 @@ async function renderPage(doc: PdfDoc, pageNumber: number, targetLongSide: numbe
         rect: { x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) },
       })
     }
-    return { canvas, textItems, pageNumber: page.pageNumber, numPages: doc.numPages }
+    // 診断: 使われているフォント(埋め込みの有無)、テキスト層の量、描画された量
+    const fonts: PdfFontInfo[] = []
+    for (const id of Object.keys(tc.styles ?? {})) {
+      try {
+        const f = page.commonObjs.has(id) ? (page.commonObjs.get(id) as { name?: string; missingFile?: boolean; fallbackName?: string }) : null
+        if (f) fonts.push({ name: String(f.name ?? id), embedded: !f.missingFile, fallback: f.fallbackName })
+        else fonts.push({ name: `${id}(${tc.styles[id].fontFamily})`, embedded: false })
+      } catch {
+        fonts.push({ name: id, embedded: false })
+      }
+    }
+    const { width: cw, height: chh } = canvas
+    const sample = ctx.getImageData(0, 0, cw, chh).data
+    let inked = 0
+    let total = 0
+    for (let i = 0; i < sample.length; i += 4 * 16) {
+      total++
+      if (sample[i] < 200 || sample[i + 1] < 200 || sample[i + 2] < 200) inked++
+    }
+    const diag: PdfDiagnostics = {
+      fonts,
+      textItems: textItems.length,
+      textChars: textItems.reduce((s, t) => s + t.str.length, 0),
+      inkRatio: total ? inked / total : 0,
+    }
+    return { canvas, textItems, pageNumber: page.pageNumber, numPages: doc.numPages, diag }
   }
 }
