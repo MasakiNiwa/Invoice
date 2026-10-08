@@ -59,7 +59,7 @@ export function AmountsPanel({ amounts, title, onHover }: Props) {
         >
           表として読み取り: 数値の列 {amounts.table.columns.length} 列。金額は
           <span className="mx-1 rounded bg-teal-50 px-1 font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300">
-            {amounts.table.columns[amounts.table.amountCol].header ?? '右端の列'}
+            {amounts.table.columns[amounts.table.amountCol].header ?? '右端'}
           </span>
           の列から取っています(数量・単価・日付の数字は含めません)
         </p>
