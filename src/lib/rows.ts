@@ -42,3 +42,27 @@ export function groupFullRows<T extends { text: string; rect: Rect; conf?: numbe
   })
 }
 
+
+/**
+ * 近い文字片だけを横につなげた「語句」。行全体(groupFullRows)と違い、横に大きく離れたもの
+ * (隣に並んだ別の領収書など)はつなげない。表題(領収書など)の検出に使う。
+ */
+export function groupPhrases<T extends { text: string; rect: Rect }>(items: T[]): TextRow[] {
+  const rows = groupFullRows(items)
+  const out: TextRow[] = []
+  for (const row of rows) {
+    const parts = [...(row.parts ?? [{ text: row.text, rect: row.rect }])].sort((a, b) => a.rect.x - b.rect.x)
+    let cur: typeof parts = []
+    const flush = () => {
+      if (cur.length) out.push({ text: cur.map((p) => p.text).join(' '), rect: unionRect(cur.map((p) => p.rect)), parts: cur })
+      cur = []
+    }
+    for (const p of parts) {
+      const last = cur[cur.length - 1]
+      if (last && p.rect.x - (last.rect.x + last.rect.w) > Math.max(last.rect.h, p.rect.h) * 2) flush()
+      cur.push(p)
+    }
+    flush()
+  }
+  return out
+}

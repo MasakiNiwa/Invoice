@@ -1,6 +1,6 @@
 // OCR に必要なファイル(tesseract.js ワーカー・WASMコア・学習データ)を public/ocr/ にコピーする。
 // CDN に依存せず、バージョン固定で自前ホスティングするため。
-import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 
@@ -30,6 +30,18 @@ const files = [
   [join(pkgDir('pdfmarkdown-ppocrv5-models'), 'recognition', 'PP-OCRv5_mobile_rec_infer.onnx'), join('..', 'paddle', 'rec.onnx')],
   [join(pkgDir('pdfmarkdown-ppocrv5-models'), 'recognition', 'ppocrv5_dict.txt'), join('..', 'paddle', 'dict.txt')],
 ]
+
+// pdf.js: 埋め込まれていない日本語フォント用の文字対応表(CMap)・標準フォント・画像デコーダ(JPEG2000/JBIG2)
+for (const dir of ['cmaps', 'standard_fonts', 'wasm']) {
+  const from = join(pkgDir('pdfjs-dist'), dir)
+  const to = join(pub, 'pdfjs', dir)
+  mkdirSync(to, { recursive: true })
+  for (const f of readdirSync(from)) {
+    const dst = join(to, f)
+    if (existsSync(dst) && statSync(dst).size === statSync(join(from, f)).size) continue
+    copyFileSync(join(from, f), dst)
+  }
+}
 
 for (const [src, name] of files) {
   const dst = join(out, name)

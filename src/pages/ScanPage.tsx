@@ -10,6 +10,8 @@ import { StageStepper } from '../components/StageStepper'
 import { useScan, type ScanState } from '../hooks/useScan'
 import { analyzeScan, type InvoiceResult } from '../lib/analyze'
 import { BatchPanel, type Batch } from '../components/BatchPanel'
+import { AmountsPanel } from '../components/AmountsPanel'
+import { SettlementPanel, type SettlementEntry } from '../components/SettlementPanel'
 import { blobToCanvas, rotateCanvas } from '../lib/image'
 import { isPdf, openPdf, type OpenedPdf, type PdfTextItem } from '../lib/pdf'
 import { makeSampleInvoice } from '../lib/sample'
@@ -87,6 +89,7 @@ export default function ScanPage() {
         requirements: inv.report ? { summary: inv.report.summary, text: inv.report.summaryText, simplified: inv.report.simplified } : null,
         engine: final.engine?.label ?? '',
         seconds: (final.finishedAt - final.startedAt) / 1000,
+        amount: inv.amount?.value ?? null,
       })
     }
   }, [addHistory])
@@ -270,6 +273,27 @@ export default function ScanPage() {
   }
   const report = inv?.report ?? null
 
+  // 精算チェック: PDF一括なら全ページの全インボイス、そうでなければこの画像のインボイス
+  const settlement: SettlementEntry[] = batch
+    ? batch.items.flatMap((it) =>
+        it.invoices.map((v) => ({
+          key: `${it.page}-${v.index}`,
+          label: `p.${it.page}${it.invoices.length > 1 ? ` #${v.index + 1}` : ''}`,
+          digits: v.digits,
+          amount: v.amount?.value ?? null,
+          estimated: v.amount?.source === 'items',
+          onSelect: batch.running ? undefined : () => void selectBatchItem(it.page, v.index),
+        })),
+      )
+    : invoices.map((v, i) => ({
+        key: String(i),
+        label: `#${i + 1}`,
+        digits: v.digits,
+        amount: v.amount?.value ?? null,
+        estimated: v.amount?.source === 'items',
+        onSelect: () => setInvIdx(i),
+      }))
+
   // ヘッダーの「公表サイト」ボタン用に最有力候補を共有
   useEffect(() => {
     setSessionResult(headerBest, busy)
@@ -407,6 +431,8 @@ export default function ScanPage() {
               />
             )}
 
+            {settlement.length > 1 && !(batch?.running && batch.items.length < 2) && <SettlementPanel entries={settlement} />}
+
             {/* 1枚に複数のインボイス */}
             {invoices.length > 1 && (
               <div className="card p-3">
@@ -449,6 +475,8 @@ export default function ScanPage() {
             </section>
 
             <RequirementsPanel report={report} title={invoices.length > 1 ? `インボイス ${invIdx + 1}` : undefined} scanning={scanning} japaneseOff={view.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} refined={textRows?.refined} onHover={setHlRects} />
+
+            <AmountsPanel amounts={inv?.amounts ?? null} title={invoices.length > 1 ? `インボイス ${invIdx + 1}` : undefined} onHover={setHlRects} />
 
             <PeekPanel peek={view.peek} />
 

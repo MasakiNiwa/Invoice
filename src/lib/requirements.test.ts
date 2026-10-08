@@ -34,6 +34,14 @@ describe('requirements', () => {
     expect(by).toMatchObject({ regno: 'ok', issuer: 'ok', date: 'ok', content: 'ok', rateTotal: 'ok', tax: 'ok', recipient: 'na', consistency: 'ok' })
     expect(r.summary).toBe('ok')
   })
+  it('taxi receipt addressed to 様 is a simplified invoice and passes', () => {
+    const r = checkRequirements(
+      rows('領 収 書', '株式会社サンプル商事 様', '金額 ¥3,120', '(うち消費税等10% ¥283)', '但し タクシー運賃として', '2026年9月8日', 'みどり自動車株式会社', '登録番号 T9803456789123'),
+      { regNo: '9803456789123', today: new Date(2026, 9, 8) },
+    )
+    expect(r.simplified).toBe(true)
+    expect(r.summary).toBe('ok')
+  })
   it('invoice missing recipient and tax', () => {
     const r = checkRequirements(rows('請求書', '株式会社テスト', '2026/10/01', 'Web制作 ¥100,000'), { regNo: null })
     const by = Object.fromEntries(r.items.map((i) => [i.id, i.status]))
