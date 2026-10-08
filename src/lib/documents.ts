@@ -142,9 +142,14 @@ function fineSkew(src: HTMLCanvasElement): number {
 }
 
 /** 書類を切り出して、向き(90°単位)と傾きを直す */
-export async function normalizeDocument(src: HTMLCanvasElement, rect: Rect | null, backend: OcrBackend, signal?: AbortSignal): Promise<FoundDocument> {
+export interface NormalizeOptions {
+  /** 90°単位の向きの自動補正(設定の「向きの自動補正」) */
+  autoRotate?: boolean
+}
+
+export async function normalizeDocument(src: HTMLCanvasElement, rect: Rect | null, backend: OcrBackend, signal?: AbortSignal, opts: NormalizeOptions = {}): Promise<FoundDocument> {
   let canvas = rect ? cropRect(src, rect) : src
-  const rot = (await detectRotation(canvas, backend, signal)) ?? 0
+  const rot = opts.autoRotate === false ? 0 : (await detectRotation(canvas, backend, signal)) ?? 0
   if (rot) canvas = rotateCanvas(canvas, rot)
   // 傾き: 文字行の向きから測って回し、残りをもう一度測って直す(大きく傾いていると1回目は浅めに出るため)。
   // 最後に投影プロファイル法で ±2° の範囲を細かく詰める
@@ -173,12 +178,12 @@ export async function normalizeDocument(src: HTMLCanvasElement, rect: Rect | nul
 }
 
 /** 画像から書類を探して、それぞれ正規化する */
-export async function findDocuments(src: HTMLCanvasElement, backend: OcrBackend, signal?: AbortSignal): Promise<FoundDocument[]> {
+export async function findDocuments(src: HTMLCanvasElement, backend: OcrBackend, signal?: AbortSignal, opts: NormalizeOptions = {}): Promise<FoundDocument[]> {
   const rects = await findDocumentRects(src, backend, signal)
   // 書類が1つでも、文字のある範囲に切り出してから傾きを測る(机の木目などの背景に惑わされないように)
-  if (rects.length <= 1) return [await normalizeDocument(src, rects[0] ?? null, backend, signal)]
+  if (rects.length <= 1) return [await normalizeDocument(src, rects[0] ?? null, backend, signal, opts)]
   const out: FoundDocument[] = []
-  for (const r of rects) out.push(await normalizeDocument(src, r, backend, signal))
+  for (const r of rects) out.push(await normalizeDocument(src, r, backend, signal, opts))
   return out
 }
 

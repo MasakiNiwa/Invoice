@@ -69,9 +69,9 @@ export function AmountsPanel({ amounts, title, onHover }: Props) {
           <li key={i} onMouseEnter={() => onHover?.([it.rect])} onMouseLeave={() => onHover?.(null)}>
             <label className="flex cursor-pointer items-center gap-2 px-2 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800/60">
               <input type="checkbox" className="accent-teal-600" checked={!!sel[i]} onChange={(e) => setSel((s) => s.map((v, k) => (k === i ? e.target.checked : v)))} />
-              <span className={`w-10 shrink-0 rounded px-1 text-center text-[10px] ${it.kind === 'item' ? 'bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>{KIND_LABEL[it.kind]}</span>
+              <span className={`w-10 shrink-0 rounded px-1 text-center text-[10px] ${it.kind === 'item' ? 'bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>{KIND_LABEL[it.kind]}{it.inferred ? '?' : ''}</span>
               <span className="min-w-0 flex-1 truncate">{it.text}</span>
-              <span className="shrink-0 font-mono font-semibold">¥{it.amount.toLocaleString()}</span>
+              <span className={`shrink-0 font-mono font-semibold ${it.amount < 0 ? 'text-rose-600' : ''}`}>{it.amount < 0 ? '-' : ''}¥{Math.abs(it.amount).toLocaleString()}</span>
             </label>
           </li>
         ))}

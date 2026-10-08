@@ -51,4 +51,32 @@ describe('amounts', () => {
   it('detects mismatch', () => {
     expect(extractAmounts(rows('A ¥100', 'B ¥200', '合計 ¥500')).match).toBe('diff')
   })
+  it('an item equal to the running sum stays an item when a total exists (R6)', () => {
+    const a = extractAmounts(rows('商品A ¥100', '商品B ¥200', '商品C ¥300', '合計 ¥600'))
+    expect(a.itemsSum).toBe(600)
+    expect(a.docTotal).toBe(600)
+    expect(a.match).toBe('equal')
+    const b = extractAmounts(rows('商品A ¥100', '商品B ¥200', '商品C ¥300'))
+    expect(b.itemsSum).toBe(600)
+  })
+  it('discounts are negative and zero totals are known (R7)', () => {
+    const a = extractAmounts(rows('商品 ¥1,000', '値引 -100円', '合計 ¥900'))
+    expect(a.itemsSum).toBe(900)
+    expect(a.match).toBe('equal')
+    const b = extractAmounts(rows('商品 ¥1,000', '値引 ¥100', '合計 ¥900'))
+    expect(b.itemsSum).toBe(900)
+    const z = extractAmounts(rows('サンプル品 ¥0', '合計 ¥0'))
+    expect(z.docTotal).toBe(0)
+    expect(invoiceAmount(z)).toEqual({ value: 0, source: 'total' })
+  })
+  it('splits total and included tax on the same line (R8)', () => {
+    const a = extractAmounts(rows('商品 ¥1,100', '合計 ¥1,100(内消費税 ¥100)'))
+    expect(a.docTotal).toBe(1100)
+    expect(a.taxTotal).toBe(100)
+    expect(a.match).toBe('equal')
+  })
+  it('takes the amount (not the unit price) when a row has both', () => {
+    const a = extractAmounts(rows('ボールペン 2本 ¥100 ¥200', 'ノート ¥300', '合計 ¥500'))
+    expect(a.itemsSum).toBe(500)
+  })
 })

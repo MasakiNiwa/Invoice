@@ -14,6 +14,7 @@
  */
 import type { Rect } from './image'
 import { toHalfWidth } from './tnumber'
+import { moneySegments, moneyTokens, type MoneySegment } from './money'
 
 export interface TextRow {
   text: string
@@ -68,6 +69,8 @@ export interface RequirementReport {
   dates: ParsedDate[]
   /** 適格簡易請求書(レシート等)らしい */
   simplified: boolean
+  /** 書類の種類をどう決めたか: 記載から推定(確か / 曖昧) か、利用者の指定か */
+  kindSource: 'auto' | 'auto-weak' | 'manual'
   summary: CheckStatus
   summaryText: string
 }
@@ -158,19 +161,9 @@ export function repairKeywords(s: string): string {
   return out
 }
 
-/** 金額らしき数値を抽出(¥1,234 / 1,234円) */
+/** 金額らしき数値を抽出(¥1,234 / 1,234円 / -100円)。符号と 0 円も保つ */
 export function parseAmounts(text: string): number[] {
-  let s = text
-  const out: number[] = []
-  // 桁区切りのカンマがピリオドに誤読されたもの(¥2.000)も金額として扱う
-  s = s.replace(/(?<=[¥\d])(\d{1,3})\.(\d{3})(?!\d)/g, '$1,$2')
-  const re = /¥\s?([\d,]+)|([\d,]+)\s?円/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(s))) {
-    const v = Number((m[1] ?? m[2]).replace(/,/g, ''))
-    if (Number.isFinite(v) && v > 0) out.push(v)
-  }
-  return out
+  return moneyTokens(text).map((t) => t.value)
 }
 
 const DATE_RE = /((?:19|20)\d{2}|令和\s?\d{1,2}|R\s?\d{1,2}|令和元)\s?[年/.\-]\s?\d{1,2}\s?[月/.\-]\s?\d{1,2}\s?日?/
@@ -192,43 +185,72 @@ export function parseDate(text: string, today = new Date()): ParsedDate | null {
   return {
     year, month, day, valid,
     beforeInvoiceSystem: valid && d < new Date(2023, 9, 1),
-    future: valid && d > tomorrow,
+    future: valid && d >= tomorrow,
     text: `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`,
   }
 }
 
-const TOTAL_ONLY_RE = /(合計|総額|請求金額|お買上|税込金額|ご利用額)/
+const TOTAL_ONLY_RE = /(合計|総額|請求金額|お買上|税込金額|ご利用額|領収金額)/
 const NOT_TOTAL_RE = /(小計|対象|消費税|税額|内税|外税|お預|釣|残高|ポイント)/
+const TAX_LABEL_RE = /(消費税|税額|内税|外税|税等|うち税)/
+const BASE_LABEL_RE = /(対象|合計|計|税込|税抜|小計)/
+/** 税率の注記(「※は軽減税率8%対象」など)。対象額の記載ではない */
+const RATE_NOTE_RE = /(※|印|商品|品目|表示|を示|です|ます)/
+
+/** 行ごとの「見出し + 金額」 */
+function segmentsOf(lines: string[]): { line: string; seg: MoneySegment }[] {
+  return lines.flatMap((line) => moneySegments(line).map((seg) => ({ line, seg })))
+}
+
+/** 書類に出てくる税率(金額の見出し、または対象・税の行に書かれたもの。注記は除く) */
+export function detectRates(lines: string[]): (10 | 8)[] {
+  const set = new Set<10 | 8>()
+  for (const { seg } of segmentsOf(lines)) if (seg.rate) set.add(seg.rate)
+  for (const l of lines) {
+    if (!/(対象|消費税|税額|税等|内税|外税|税込|税抜)/.test(l) || RATE_NOTE_RE.test(l)) continue
+    for (const m of l.matchAll(/(?<![\d.])(10|8)\s?%/g)) set.add(Number(m[1]) as 10 | 8)
+  }
+  return [...set].sort((a, b) => b - a)
+}
 
 /** 税率ごとの対象額・税額と総額を取り出し、整合性を検算する */
 export function extractTaxBreakdown(lines: string[]): TaxBreakdown | null {
+  const segs = segmentsOf(lines)
+  const rates = detectRates(lines)
+  const isTax = (x: { seg: MoneySegment }) => TAX_LABEL_RE.test(x.seg.label)
   const res: TaxRateLine[] = []
-  for (const rate of [10, 8] as const) {
-    const rateRe = new RegExp(`(^|[^\\d])${rate}\\s?%`)
-    const baseLine = lines.find((l) => rateRe.test(l) && /(対象|合計|計|税込|税抜)/.test(l) && !/(消費税|税額|内税|税等)/.test(l) && parseAmounts(l).length)
-    const taxLine = lines.find((l) => rateRe.test(l) && /(消費税|税額|内税|外税|税等)/.test(l) && parseAmounts(l).length)
-    if (!baseLine && !taxLine) continue
-    const base = baseLine ? Math.max(...parseAmounts(baseLine)) : null
-    const tax = taxLine ? Math.max(...parseAmounts(taxLine)) : null
+  for (const rate of rates) {
+    const baseSeg = segs.find((x) => x.seg.rate === rate && !isTax(x) && (BASE_LABEL_RE.test(x.seg.label) || !/[^\s()()%\d:]/.test(x.seg.label)))
+    // 税率の書かれていない税額は、税率が1種類のときだけその税率のものとみなす
+    const taxSeg = segs.find((x) => isTax(x) && x.seg.rate === rate) ?? (rates.length === 1 ? segs.find((x) => isTax(x) && x.seg.rate === null) : undefined)
+    const base = baseSeg ? baseSeg.seg.value : null
+    const tax = taxSeg ? taxSeg.seg.value : null
+    // 税込・税抜の明記を優先し、無ければ内税/外税のどちらで合うかを推定
+    const ctx = `${baseSeg?.seg.label ?? ''} ${baseSeg?.line ?? ''} ${taxSeg?.seg.label ?? ''}`
+    const forced: TaxRateLine['mode'] = /(税込|内税|内消費税|うち消費税|うち税|\(内)/.test(ctx) ? '内税' : /(税抜|外税|税別)/.test(ctx) ? '外税' : null
     let mode: TaxRateLine['mode'] = null
     let ok: boolean | null = null
     if (base !== null && tax !== null) {
       // 端数処理(切捨て・四捨五入・切上げ)を許容して ±1円
-      if (Math.abs(tax - (base * rate) / (100 + rate)) < 1) mode = '内税'
-      else if (Math.abs(tax - (base * rate) / 100) < 1) mode = '外税'
+      const inner = Math.abs(tax - (base * rate) / (100 + rate)) < 1
+      const outer = Math.abs(tax - (base * rate) / 100) < 1
+      if (forced === '内税') mode = inner ? '内税' : null
+      else if (forced === '外税') mode = outer ? '外税' : null
+      else mode = inner ? '内税' : outer ? '外税' : null
       ok = mode !== null
-    }
+      if (!ok) mode = forced
+    } else mode = forced
     res.push({ rate, base, tax, mode, ok })
   }
-  // 総額: 「合計」「請求金額」など(小計・対象・税額・お預り等は除く)の最大金額
-  const totals = lines.filter((l) => TOTAL_ONLY_RE.test(l) && !NOT_TOTAL_RE.test(l)).flatMap(parseAmounts)
+  // 総額: 「合計」「請求金額」など(小計・対象・税額・お預り等は除く)の金額
+  const totals = segs.filter((x) => TOTAL_ONLY_RE.test(x.seg.label) && !NOT_TOTAL_RE.test(x.seg.label)).map((x) => x.seg.value)
   const total = totals.length ? Math.max(...totals) : null
   if (res.length === 0 && total === null) return null
   let totalOk: boolean | null = null
   const withBase = res.filter((r) => r.base !== null)
   if (total !== null && withBase.length > 0) {
     const sumIn = withBase.reduce((s, r) => s + (r.base ?? 0), 0)
-    const sumOut = withBase.reduce((s, r) => s + (r.base ?? 0) + (r.mode === '外税' ? r.tax ?? 0 : 0), 0)
+    const sumOut = withBase.reduce((s, r) => s + (r.base ?? 0) + (r.mode !== '内税' ? r.tax ?? 0 : 0), 0)
     const tol = withBase.length
     totalOk = Math.abs(sumIn - total) <= tol || Math.abs(sumOut - total) <= tol
   }
@@ -236,7 +258,13 @@ export function extractTaxBreakdown(lines: string[]): TaxBreakdown | null {
 }
 const ISSUER_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|医療法人|社会福祉法人|学校法人|\(株\)|\(有\)|㈱|㈲|事務所|商店|商事|店$|店\b|本店|支店|[^\s]店|食堂|[^\s]堂$|[^\s]屋$|亭|カフェ|クリニック|医院|病院|薬局|ホテル|旅館|工業|工房|製作所)/
 const RECIPIENT_RE = /(御中|様|殿)(?!式)/
-const RECEIPT_RE = /(領収書|領収証|レシート|お買上|お買い上げ|ご来店|お預り|お預かり|お釣|釣銭|POS|レジ|nanaco|Suica|PayPay|現金|クレジット|タクシー|運賃|乗車|駐車|ご利用料金)/i
+/** 小売・飲食・タクシー・駐車場などのレシートに特有の記載(簡易インボイスの手がかり) */
+const RECEIPT_STRONG_RE = /(レシート|お買上|お買い上げ|ご来店|お預り|お預かり|お釣|釣銭|POS|レジ|タクシー|運賃|乗車|迎車|駐車|入庫|出庫)/i
+/** 発行者の名前が小売・飲食・宿泊などの店舗らしい(〇〇店・食堂・カフェ…) */
+const RETAIL_ISSUER_RE = /([^\s支本]店(?!舗|員|長|頭|内)|店舗|食堂|カフェ|喫茶|[^\s]屋$|亭|薬局|ドラッグ|ホテル|旅館|コンビニ|スーパー|ストア|マート|ショップ|ベーカリー|レストラン|ダイニング|居酒屋|交通|ハイヤー|パーキング)/
+/** 表題が領収書(これだけでは簡易インボイスかどうか決められない) */
+const RECEIPT_TITLE_RE = /(領収書|領収証)/
+const INVOICE_TITLE_RE = /(請求書|請求明細|納品書|Invoice|INVOICE)/
 const RATE_RE = /(10|8)\s?%/
 const REDUCED_MARK_RE = /(軽減|※|\*|★|☆|#)/
 const TAX_RE = /(消費税|内税|外税|税額|税等|内消費税|うち税|税\s?¥)/
@@ -247,22 +275,49 @@ function rowsMatching(rows: { n: string; r: TextRow }[], re: RegExp) {
   return rows.filter((x) => re.test(x.n))
 }
 
-export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | null; regNoWeak?: boolean; today?: Date }): RequirementReport {
+export type DocKind = 'auto' | 'normal' | 'simplified'
+
+export interface RequirementOptions {
+  regNo: string | null
+  /** 番号は読めたが「T」が無い */
+  regNoWeak?: boolean
+  /** 検算NGの読みを1桁補正した推定値(目視確認が必要) */
+  regNoCorrected?: boolean
+  /** 書類の種類の指定(既定は記載から推定) */
+  docKind?: DocKind
+  today?: Date
+}
+
+export function checkRequirements(rawRows: TextRow[], opts: RequirementOptions): RequirementReport {
   const rows = rawRows.map((r) => ({ n: repairKeywords(normalizeRow(r.text)), r })).filter((x) => x.n.length > 0)
   const ev = (xs: { n: string; r: TextRow }[], k = 3) => ({ evidence: xs.slice(0, k).map((x) => x.n.slice(0, 40)), rects: xs.slice(0, k).map((x) => x.r.rect) })
   const items: RequirementItem[] = []
-  // 適格簡易請求書(小売・飲食・タクシー・駐車場など)。レシート・領収書には「〇〇様」と書かれていても簡易インボイスでよい。
-  // 「御中」宛ての請求書は通常の適格請求書として扱う
-  const simplified = rows.some((x) => RECEIPT_RE.test(x.n)) && !rows.some((x) => /御中/.test(x.n))
+  // 適格簡易請求書を交付できるのは小売・飲食・タクシー・駐車場など不特定多数に販売する事業に限られるため、
+  // 支払方法(現金・カード)や表題だけでは決められない。レシート特有の記載があれば推定し、
+  // 表題が領収書なだけの場合は「曖昧」として、省略できる項目も要確認にする。
+  // 「御中」宛て・請求書の表題がある書類は通常の適格請求書として扱う
+  const normalLike = rows.some((x) => /御中/.test(x.n) || INVOICE_TITLE_RE.test(x.n))
+  const strong = !normalLike && rows.some((x) => RECEIPT_STRONG_RE.test(x.n) || (RETAIL_ISSUER_RE.test(x.n) && !RECIPIENT_RE.test(x.n)))
+  const weak = !normalLike && !strong && rows.some((x) => RECEIPT_TITLE_RE.test(x.n))
+  const kind = opts.docKind ?? 'auto'
+  const simplified = kind === 'simplified' || (kind === 'auto' && (strong || weak))
+  const kindSource: RequirementReport['kindSource'] = kind !== 'auto' ? 'manual' : weak ? 'auto-weak' : 'auto'
+  /** 簡易インボイスなら省略できる項目の状態(種類が曖昧なら要確認) */
+  const exempt: CheckStatus = kindSource === 'auto-weak' ? 'warn' : 'na'
+  const exemptNote = kindSource === 'auto-weak' ? '(領収書の表題から簡易インボイスと推定。小売・飲食・タクシー等以外の事業者の書類なら必要です)' : ''
 
   // 1a. 登録番号
   items.push({
     id: 'regno',
     label: '登録番号',
-    status: opts.regNo ? (opts.regNoWeak ? 'warn' : 'ok') : 'ng',
+    status: opts.regNo ? (opts.regNoWeak || opts.regNoCorrected ? 'warn' : 'ok') : 'ng',
     evidence: opts.regNo ? [`T${opts.regNo}`] : [],
     rects: [],
-    message: opts.regNo ? (opts.regNoWeak ? '番号は読めましたが「T」が確認できません' : '検算OKの登録番号があります') : '登録番号を確認できません',
+    message: !opts.regNo
+      ? '登録番号を確認できません'
+      : opts.regNoCorrected
+        ? '読み取った番号を1桁補正した推定値です。原本の番号と照合してください'
+        : opts.regNoWeak ? '番号は読めましたが「T」が確認できません' : '検算OKの登録番号があります',
   })
 
   // 1b. 発行者名
@@ -319,46 +374,54 @@ export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | nu
         : has8 ? '取引内容と軽減税率対象の旨があります' : '取引内容らしき記載があります',
   })
 
-  // 4. 税率ごとの合計額と適用税率
-  const rateRows = rowsMatching(rows, RATE_RE)
-  let rateTotal = rateRows.filter((x) => TOTAL_RE.test(x.n) || (parseAmounts(x.n).length > 0 && !TAX_RE.test(x.n)))
-  // 税率が1種類だけで総額(合計・金額など)の記載があれば、それがその税率の合計額
-  const rates = new Set(rateRows.flatMap((x) => [...x.n.matchAll(/(10|8)\s?%/g)].map((m) => m[1])))
-  if (rateTotal.length === 0 && rates.size === 1) {
-    rateTotal = rows.filter((x) => (/(合計|総額|請求金額|領収金額|お買上)/.test(x.n) || /^(金額|運賃|料金)\s?[:：]?\s?[¥\d]/.test(x.n)) && parseAmounts(x.n).length > 0)
+  // 4. 税率ごとの合計額と適用税率 / 5. 税率ごとの消費税額等
+  // 見出しだけ(「10%対象」「消費税10%」)では合格にせず、税率ごとに金額があるかを確かめる
+  const breakdown = extractTaxBreakdown(rows.map((x) => x.n))
+  const rates = detectRates(rows.map((x) => x.n))
+  const rowsWith = (pred: (seg: MoneySegment) => boolean) => rows.filter((x) => moneySegments(x.n).some(pred))
+  const rateRows = rowsMatching(rows, RATE_RE).filter((x) => !RATE_NOTE_RE.test(x.n) || moneySegments(x.n).length > 0)
+  const totalRows = rows.filter((x) => (/(合計|総額|請求金額|領収金額|お買上)/.test(x.n) || /^(金額|運賃|料金)\s?[:：]?\s?[¥\d]/.test(x.n)) && !/(小計|対象)/.test(x.n) && moneySegments(x.n).length > 0)
+  const taxSegRows = rowsWith((g) => TAX_LABEL_RE.test(g.label))
+  const lines = breakdown?.lines ?? []
+  const missingBase = lines.filter((l) => l.base === null).map((l) => l.rate)
+  const missingTax = lines.filter((l) => l.tax === null).map((l) => l.rate)
+  const anyTax = taxSegRows.length > 0
+  const pct = (rs: number[]) => rs.map((r) => `${r}%`).join('・')
+  let rateTotal: { status: CheckStatus; message: string; rows: typeof rows }
+  if (rates.length === 0) {
+    // 税率の記載なし。簡易インボイスは税額だけの表示でもよい(税率ごとに区分した金額と税額があれば)
+    if (simplified && anyTax && totalRows.length) rateTotal = { status: 'ok', message: '税率の記載はありませんが、合計額と税額の記載があります(簡易インボイスは税額の表示でも可)', rows: totalRows }
+    else rateTotal = { status: simplified ? 'warn' : 'ng', message: '適用税率(10%・8%)を確認できません', rows: [] }
+  } else if (missingBase.length === 0) {
+    rateTotal = { status: 'ok', message: '税率ごとの対象額があります', rows: rowsWith((g) => g.rate !== null && !TAX_LABEL_RE.test(g.label)) }
+  } else if (rates.length === 1 && totalRows.length) {
+    // 税率が1種類だけで総額(合計・金額など)の記載があれば、それがその税率の合計額
+    rateTotal = { status: 'ok', message: `${rates[0]}%のみの書類で、合計額の記載があります`, rows: totalRows }
+  } else {
+    rateTotal = { status: 'warn', message: `${pct(missingBase)}の対象額(金額)を特定できません`, rows: rateRows }
   }
-  items.push({
-    id: 'rateTotal',
-    label: '税率ごとの合計額・適用税率',
-    status: rateTotal.length ? 'ok' : rateRows.length ? 'warn' : simplified ? 'warn' : 'ng',
-    ...ev(rateTotal.length ? rateTotal : rateRows, 3),
-    message: rateTotal.length ? '税率ごとの対象額があります' : rateRows.length ? '税率の記載はありますが、税率ごとの合計額を特定できません' : '適用税率(10%・8%)を確認できません',
-  })
+  items.push({ id: 'rateTotal', label: '税率ごとの合計額・適用税率', status: rateTotal.status, ...ev(rateTotal.rows.length ? rateTotal.rows : rateRows, 3), message: rateTotal.message })
 
-  // 5. 税率ごとの消費税額等
-  const taxRows = rowsMatching(rows, TAX_RE)
-  const taxOk = taxRows.some((x) => parseAmounts(x.n).length > 0 || /\d/.test(x.n))
-  const rateOk = items[items.length - 1].status === 'ok'
-  items.push({
-    id: 'tax',
-    label: '税率ごとの消費税額等',
-    status: taxOk ? 'ok' : simplified && rateOk ? 'na' : 'ng',
-    ...ev(taxRows, 3),
-    message: taxOk ? '消費税額の記載があります' : simplified && rateOk ? '簡易インボイスは適用税率か税額のどちらかでよいため省略可' : '消費税額を確認できません',
-  })
+  // 税額: 税率ごとに金額が必要(簡易インボイスは適用税率か税額のどちらかでよい)
+  let tax: { status: CheckStatus; message: string }
+  if (rates.length && missingTax.length === 0) tax = { status: 'ok', message: '税率ごとの消費税額があります' }
+  else if (!rates.length && anyTax) tax = { status: 'ok', message: '消費税額の記載があります' }
+  else if (simplified && rates.length) tax = { status: exempt, message: `簡易インボイスは適用税率か税額のどちらかでよいため省略可${exemptNote}` }
+  else if (rates.length && missingTax.length < rates.length) tax = { status: 'warn', message: `${pct(missingTax)}の消費税額を確認できません(税率ごとに必要です)` }
+  else tax = { status: 'ng', message: '消費税額(金額)を確認できません' }
+  items.push({ id: 'tax', label: '税率ごとの消費税額等', ...tax, ...ev(taxSegRows.length ? taxSegRows : rowsMatching(rows, TAX_RE), 3) })
 
   // 6. 宛名
   const rec = rowsMatching(rows, RECIPIENT_RE)
   items.push({
     id: 'recipient',
     label: '宛名(交付を受ける事業者)',
-    status: rec.length ? 'ok' : simplified ? 'na' : 'ng',
+    status: rec.length ? 'ok' : simplified ? exempt : 'ng',
     ...ev(rec, 2),
-    message: rec.length ? '宛名があります' : simplified ? 'レシート等の簡易インボイスなら省略可' : '宛名(〇〇御中・様)を確認できません',
+    message: rec.length ? '宛名があります' : simplified ? `簡易インボイスなら省略可${exemptNote}` : '宛名(〇〇御中・様)を確認できません',
   })
 
   // 金額の検算: 対象額 × 税率 = 税額、税率ごとの金額の合計 = 総額
-  const breakdown = extractTaxBreakdown(rows.map((x) => x.n))
   const checked = breakdown?.lines.filter((l) => l.ok !== null) ?? []
   if (checked.length) {
     const ok = checked.every((l) => l.ok)
@@ -388,30 +451,17 @@ export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | nu
     summary === 'ok' ? '記載事項がそろっている可能性が高いです'
       : summary === 'warn' ? '一部、自動では確認できない項目があります'
         : '確認できない記載事項があります'
-  return { items, simplified, summary, summaryText, breakdown, dates: parsed.map((v) => v.d) }
+  return { items, simplified, kindSource, summary, summaryText, breakdown, dates: parsed.map((v) => v.d) }
 }
 
 /** 「10%対象 ¥X」と「消費税(10%) ¥Y」の組から、内税/外税のどちらかで端数処理の範囲で一致するか */
 export function checkTaxConsistency(lines: string[]): { ok: boolean; message: string; lines: string[] } | null {
-  const results: { rate: number; base: number; tax: number; mode: string; ok: boolean }[] = []
-  for (const rate of [10, 8]) {
-    const rateRe = new RegExp(`(^|[^\\d])${rate}\\s?%`)
-    const baseLine = lines.find((l) => rateRe.test(l) && /(対象|合計|計)/.test(l) && !/(消費税|税額|内税|税等)/.test(l) && parseAmounts(l).length)
-    const taxLine = lines.find((l) => rateRe.test(l) && /(消費税|税額|内税|税等)/.test(l) && parseAmounts(l).length)
-    if (!baseLine || !taxLine) continue
-    const base = Math.max(...parseAmounts(baseLine))
-    const tax = Math.max(...parseAmounts(taxLine))
-    const inner = (base * rate) / (100 + rate)
-    const outer = (base * rate) / 100
-    const okInner = Math.abs(tax - inner) < 1
-    const okOuter = Math.abs(tax - outer) < 1
-    results.push({ rate, base, tax, mode: okInner ? '内税' : okOuter ? '外税' : '', ok: okInner || okOuter })
-  }
+  const results = (extractTaxBreakdown(lines)?.lines ?? []).filter((l) => l.ok !== null)
   if (results.length === 0) return null
   const ok = results.every((r) => r.ok)
   return {
     ok,
-    lines: results.map((r) => `${r.rate}%: 対象 ¥${r.base.toLocaleString()} → 税 ¥${r.tax.toLocaleString()} ${r.ok ? `(${r.mode}で一致)` : '(不一致?)'}`),
+    lines: results.map((r) => `${r.rate}%: 対象 ¥${r.base!.toLocaleString()} → 税 ¥${r.tax!.toLocaleString()} ${r.ok ? `(${r.mode}で一致)` : '(不一致?)'}`),
     message: ok ? '対象額と税額が端数処理の範囲で一致しています' : '対象額と税額が一致しないようです(OCRの誤読の可能性もあります)',
   }
 }

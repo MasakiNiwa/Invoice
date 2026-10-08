@@ -38,8 +38,11 @@ self.onmessage = async (ev: MessageEvent<InMsg>) => {
       try {
         await ready
         const result = await core.recognize(m.image, m.params, (p) => post({ type: 'rec-progress', id: m.id, progress: p }))
+        // 処理中に取り消されたものは結果を返さない
+        if (cancelled.delete(m.id)) return post({ type: 'error', id: m.id, message: 'aborted', aborted: true })
         post({ type: 'result', id: m.id, result })
       } catch (e) {
+        cancelled.delete(m.id)
         post({ type: 'error', id: m.id, message: String((e as Error)?.message ?? e) })
       }
     })

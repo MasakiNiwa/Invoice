@@ -100,11 +100,31 @@ export class PaddleEngine implements OcrBackend {
     const img = image.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, image.width, image.height)
     const id = this.nextId++
     return new Promise<OcrResult>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      // 中止されたら、すぐに AbortError で終える(後から届いた結果は捨てる)。
+      // 順番待ちのジョブは Worker 側でも取り消す(新しいスキャンを待たせない)
+      const onAbort = () => {
+        if (!this.pending.delete(id)) return
+        this.worker?.postMessage({ type: 'cancel', ids: [id] })
+        reject(new AbortError())
+      }
+      const done = () => signal?.removeEventListener('abort', onAbort)
+      this.pending.set(id, {
+        resolve: (r) => { done(); resolve(r) },
+        reject: (e) => { done(); reject(e) },
+      })
+      signal?.addEventListener('abort', onAbort, { once: true })
       this.worker!.postMessage({ type: 'recognize', id, image: img, params }, [img.data.buffer])
-      // 中止されたら、まだ順番待ちのジョブを取り消す(新しいスキャンを待たせない)
-      signal?.addEventListener('abort', () => this.worker?.postMessage({ type: 'cancel', ids: [id] }), { once: true })
     })
+  }
+
+  /** Worker を終了する(GPU/CPU の設定を切り替えたとき、古いモデルのメモリを解放する) */
+  dispose() {
+    this.worker?.terminate()
+    this.worker = null
+    this.initPromise = null
+    for (const p of this.pending.values()) p.reject(new AbortError())
+    this.pending.clear()
+    this.setStatus({ state: 'idle', status: '', progress: 0, provider: null })
   }
 
   /** モデルが保存済みか(初回ダウンロードの案内用) */
@@ -115,6 +135,9 @@ export class PaddleEngine implements OcrBackend {
 
 let shared: PaddleEngine | null = null
 export function getPaddle(pref: PaddleBackendPref): PaddleEngine {
-  if (!shared || shared.pref !== pref) shared = new PaddleEngine(pref)
+  if (!shared || shared.pref !== pref) {
+    shared?.dispose()
+    shared = new PaddleEngine(pref)
+  }
   return shared
 }

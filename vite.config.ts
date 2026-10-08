@@ -50,6 +50,8 @@ export default defineConfig({
         runtimeCaching: [
           { urlPattern: /\.wasm$/, handler: 'CacheFirst', options: { cacheName: 'ocr-wasm', expiration: { maxEntries: 8 } } },
           { urlPattern: /\/ocr\//, handler: 'CacheFirst', options: { cacheName: 'ocr-tesseract', expiration: { maxEntries: 16 } } },
+          // 日本語 PDF の文字対応表(CMap)・標準フォント。使ったものをオフラインでも使えるよう保存する
+          { urlPattern: /\/pdfjs\//, handler: 'CacheFirst', options: { cacheName: 'pdfjs-assets', expiration: { maxEntries: 200 } } },
         ],
       },
     }),

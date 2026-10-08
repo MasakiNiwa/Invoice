@@ -9,6 +9,7 @@ import { ScanLog } from '../components/ScanLog'
 import { StageStepper } from '../components/StageStepper'
 import { useScan, type ScanState } from '../hooks/useScan'
 import { analyzeScan, type InvoiceResult } from '../lib/analyze'
+import type { DocKind } from '../lib/requirements'
 import { applyNormalization, findDocuments, type FoundDocument } from '../lib/documents'
 import { getPaddle } from '../lib/ocr/paddle'
 import { BatchPanel, type Batch, type BatchItem } from '../components/BatchPanel'
@@ -82,6 +83,9 @@ export default function ScanPage() {
   const [selected, setSelected] = useState<{ id: number; state: ScanState } | null>(null)
   /** 表示中のインボイス(1枚に複数あるとき) */
   const [invIdx, setInvIdx] = useState(0)
+  /** インボイスごとの書類の種類の指定(表示中の書類に対して) */
+  const [docKinds, setDocKinds] = useState<DocKind[]>([])
+  useEffect(() => setDocKinds([]), [doc])
 
   /** 終わったスキャンの結果を、インボイスごとに履歴へ保存 */
   const saveResults = useCallback((name: string, canvas: HTMLCanvasElement, final: ScanState, invoices: InvoiceResult[]) => {
@@ -132,14 +136,15 @@ export default function ScanPage() {
   }
 
   /** 画像(またはスキャンした PDF のページ)から書類を探して向き・傾きを直す。PaddleOCR のときだけ */
-  const splitDocuments = useCallback(async (canvas: HTMLCanvasElement): Promise<FoundDocument[] | null> => {
+  const splitDocuments = useCallback(async (canvas: HTMLCanvasElement, signal?: AbortSignal): Promise<FoundDocument[] | null> => {
     const st = useSettings.getState()
     if (st.engine !== 'paddle' || !st.splitDocuments) return null
     try {
       const paddle = getPaddle(st.paddleBackend)
       await paddle.init()
-      return await findDocuments(canvas, paddle)
+      return await findDocuments(canvas, paddle, signal, { autoRotate: st.autoRotate })
     } catch (e) {
+      if (signal?.aborted) return null
       console.warn('書類の検出に失敗しました', e)
       return null
     }
@@ -216,13 +221,20 @@ export default function ScanPage() {
     setInvIdx(inv)
   }, [batch, doc])
 
+  /** 読み込み中の処理(別のファイルを選んだり、クリアしたら古い処理の結果は使わない) */
+  const loadRef = useRef<AbortController | null>(null)
   const openFile = useCallback(async (file: File, page = 1) => {
+    loadRef.current?.abort()
+    const ctl = new AbortController()
+    loadRef.current = ctl
+    const signal = ctl.signal
     setLoadError(null)
     setLoading(isPdf(file) ? 'PDFを読み込み中…' : '画像を読み込み中…')
     try {
       if (isPdf(file)) {
         closePdf()
         const pdf = await openPdf(file)
+        if (signal.aborted) return void pdf.destroy()
         pdfRef.current = pdf
         if (pdf.numPages > 1 && batchPdf) {
           setLoading(null)
@@ -231,27 +243,32 @@ export default function ScanPage() {
         }
         // 1ページの PDF でも、スキャン(テキスト層なし)なら書類の分割・補正を試す
         const one = await pdf.render(page)
+        if (signal.aborted) return
         if (one.textItems.length <= 5) {
           setLoading('書類を探しています…')
-          const docs = await splitDocuments(one.canvas)
+          const docs = await splitDocuments(one.canvas, signal)
+          if (signal.aborted) return
           if (docs && docs.length > 1) {
             setLoading(null)
             await runBatch(file, null, docs)
             return
           }
           if (docs?.[0]) {
-            scanDoc({ name: file.name, canvas: docs[0].canvas, normalized: true, note: docNote(docs[0]), diag: one.diag })
+            // 補正後の画像を読むが、ページの切り替えのため PDF の情報(テキスト層は座標が変わるので除く)は残す
+            scanDoc({ name: file.name, canvas: docs[0].canvas, normalized: true, note: docNote(docs[0]), diag: one.diag, pdf: { file, page: one.pageNumber, numPages: one.numPages, textItems: [] } })
             return
           }
         }
-        const p = await pdf.render(page)
-        scanDoc({ name: file.name, canvas: p.canvas, diag: p.diag, pdf: { file, page: p.pageNumber, numPages: p.numPages, textItems: p.textItems } })
+        // 最初に描画したページをそのまま使う(同じページを二度描画しない)
+        scanDoc({ name: file.name, canvas: one.canvas, diag: one.diag, pdf: { file, page: one.pageNumber, numPages: one.numPages, textItems: one.textItems } })
       } else if (file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|heic)$/i.test(file.name)) {
         closePdf()
         const canvas = await blobToCanvas(file)
+        if (signal.aborted) return
         // 書類が複数写っていれば分けて、それぞれ向き・傾きを直してから読み取る
         setLoading('書類を探しています…')
-        const docs = await splitDocuments(canvas)
+        const docs = await splitDocuments(canvas, signal)
+        if (signal.aborted) return
         setLoading(null)
         if (docs && docs.length > 1) {
           await runBatch(file, null, docs)
@@ -264,10 +281,11 @@ export default function ScanPage() {
         setLoadError('対応していないファイル形式です(画像またはPDFを選んでください)')
       }
     } catch (e) {
+      if (signal.aborted) return
       console.error(e)
       setLoadError(`読み込みに失敗しました: ${(e as Error).message}`)
     } finally {
-      setLoading(null)
+      if (loadRef.current === ctl) setLoading(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanDoc, runBatch, batchPdf, splitDocuments])
@@ -314,6 +332,8 @@ export default function ScanPage() {
   // ヘッダーの「クリア」
   useEffect(() => {
     if (clearToken === 0) return
+    loadRef.current?.abort()
+    setLoading(null)
     closePdf()
     reset()
     setDoc(null)
@@ -346,8 +366,8 @@ export default function ScanPage() {
   // 主候補(T付き/登録番号付近・検算OK)は最大3件(1枚に複数インボイスがあればその数まで)、それ以外は折りたたみ
   const textRows = view.textRows
   const invoices = useMemo(
-    () => (viewImage ? analyzeScan(view.candidates, textRows?.rows ?? null, viewImage.width, viewImage.height) : []),
-    [view.candidates, textRows, viewImage],
+    () => (viewImage ? analyzeScan(view.candidates, textRows?.rows ?? null, viewImage.width, viewImage.height, docKinds) : []),
+    [view.candidates, textRows, viewImage, docKinds],
   )
   const inv = invoices[Math.min(invIdx, Math.max(0, invoices.length - 1))]
   const valid = cands.filter(isPrimary).slice(0, Math.max(3, invoices.length))
@@ -564,7 +584,10 @@ export default function ScanPage() {
               )}
             </section>
 
-            <RequirementsPanel report={report} title={invoices.length > 1 ? `インボイス ${invIdx + 1}` : undefined} scanning={scanning} japaneseOff={view.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} refined={textRows?.refined} onHover={setHlRects} />
+            <RequirementsPanel report={report} title={invoices.length > 1 ? `インボイス ${invIdx + 1}` : undefined} scanning={scanning} japaneseOff={view.engine?.id === 'tesseract' && !useJapanese && textRows?.source !== 'pdf'} rows={textRows?.rows} refined={textRows?.refined} onHover={setHlRects}
+              docKind={docKinds[invIdx] ?? 'auto'}
+              onDocKind={(k) => setDocKinds((ks) => { const n = [...ks]; n[invIdx] = k; return n })}
+            />
 
             <AmountsPanel amounts={inv?.amounts ?? null} title={invoices.length > 1 ? `インボイス ${invIdx + 1}` : undefined} onHover={setHlRects} />
 

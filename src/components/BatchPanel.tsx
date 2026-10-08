@@ -95,7 +95,7 @@ export function BatchPanel({ batch, selected, onSelect, onStop }: Props) {
         <div className="h-full bg-teal-500 transition-[width]" style={{ width: `${(batch.done / Math.max(1, batch.total)) * 100}%` }} />
       </div>
       {batch.running && (
-        <p className="mb-2 flex items-center gap-1 text-xs text-slate-500"><Loader2 size={12} className="animate-spin" /> {batch.current} を読み取り中…(終わったものから確認できます)</p>
+        <p className="mb-2 flex items-center gap-1 text-xs text-slate-500"><Loader2 size={12} className="animate-spin" /> {batch.current} を読み取り中…(結果は一覧に順に追加され、すべて終わると選んで確認できます)</p>
       )}
       <ul className="max-h-80 divide-y divide-slate-100 overflow-auto rounded-xl border border-slate-200 text-sm dark:divide-slate-800 dark:border-slate-800">
         {batch.items.flatMap((it) =>

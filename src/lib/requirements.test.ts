@@ -81,3 +81,74 @@ describe('requirements', () => {
     expect(checkTaxConsistency(['10%対象 ¥1,000', '消費税(10%) ¥150'])?.ok).toBe(false)
   })
 })
+
+/** レビューで再現されたケース(見出しだけ・税率の片方の欠け・支払方法による簡易判定など) */
+describe('requirements: review cases', () => {
+  const normal = (...extra: string[]) => rows('請求書', '株式会社サンプル 御中', '発行: 株式会社テスト', '登録番号 T7000012050002', '2026年10月1日', 'Web制作費 一式', ...extra)
+  const by = (r: ReturnType<typeof checkRequirements>) => Object.fromEntries(r.items.map((i) => [i.id, i.status]))
+  const today = new Date(2026, 9, 9)
+  it('keeps sign and zero in amounts', () => {
+    expect(parseAmounts(normalizeRow('値引 -100円'))).toEqual([-100])
+    expect(parseAmounts(normalizeRow('値引 ▲100円'))).toEqual([-100])
+    expect(parseAmounts(normalizeRow('合計 ¥0'))).toEqual([0])
+    expect(parseAmounts(normalizeRow('コーヒー ¥300'))).toEqual([300])
+  })
+  it('headings without amounts are not OK (R2)', () => {
+    const r = checkRequirements(normal('10%対象', '消費税10%'), { regNo: '7000012050002', today })
+    expect(by(r).rateTotal).not.toBe('ok')
+    expect(by(r).tax).not.toBe('ok')
+    expect(r.summary).not.toBe('ok')
+  })
+  it('a missing tax amount for one of two rates is not OK (R3)', () => {
+    const r = checkRequirements(normal('10%対象 ¥110', '8%対象 ¥108 ※軽減税率', '消費税(10%) ¥10', '合計 ¥218'), { regNo: '7000012050002', today })
+    expect(by(r).rateTotal).toBe('ok')
+    expect(by(r).tax).toBe('warn')
+    expect(r.summary).not.toBe('ok')
+  })
+  it('both rates with tax are OK', () => {
+    const r = checkRequirements(normal('10%対象 ¥110', '8%対象 ¥108 ※軽減税率', '消費税(10%) ¥10', '消費税(8%) ¥8', '合計 ¥218'), { regNo: '7000012050002', today })
+    expect(by(r)).toMatchObject({ rateTotal: 'ok', tax: 'ok', recipient: 'ok', consistency: 'ok', total: 'ok' })
+  })
+  it('paying in cash does not make an invoice simplified (R4)', () => {
+    const r = checkRequirements(rows('株式会社テスト', '登録番号 T7000012050002', '2026年10月1日', 'Web制作費 ¥110,000', '10%対象 ¥110,000', '支払方法 現金'), { regNo: '7000012050002', today })
+    expect(r.simplified).toBe(false)
+    expect(by(r).recipient).toBe('ng')
+    expect(by(r).tax).toBe('ng')
+  })
+  it('a receipt title alone is an uncertain simplified invoice', () => {
+    const r = checkRequirements(rows('領収書', '株式会社テスト', '登録番号 T7000012050002', '2026年10月1日', 'Web制作費として', '金額 ¥110,000', '10%対象 ¥110,000'), { regNo: '7000012050002', today })
+    expect(r.simplified).toBe(true)
+    expect(r.kindSource).toBe('auto-weak')
+    expect(by(r).recipient).toBe('warn')
+    // 種類を指定すればそれに従う
+    const n = checkRequirements(rows('領収書', '株式会社テスト', '金額 ¥110,000', '10%対象 ¥110,000'), { regNo: null, docKind: 'normal', today })
+    expect(n.simplified).toBe(false)
+    expect(by(n).recipient).toBe('ng')
+  })
+  it('a store name followed by its address is a retail issuer', () => {
+    const r = checkRequirements(rows('領収書', '足立弘道1丁目店東京都足立区弘道1丁目1番15号', '登録番号 T7000012050002', '2026年10月1日', '但しプリント代として', '¥40', '(税率10%対象 ¥40)', '(内消費税等10% ¥3)'), { regNo: '7000012050002', today })
+    expect(r.kindSource).toBe('auto')
+    expect(r.summary).toBe('ok')
+  })
+  it('simplified receipt showing only the tax amount is accepted (R5)', () => {
+    const r = checkRequirements(rows('〇〇食堂', '登録番号 T7000012050002', '2026年10月1日', 'ランチ代として', '合計 ¥330', '対象 ¥330(内消費税 ¥30)'), { regNo: '7000012050002', today })
+    expect(r.simplified).toBe(true)
+    expect(by(r).rateTotal).toBe('ok')
+    expect(by(r).tax).toBe('ok')
+  })
+  it('reads total and tax on the same line (R8)', () => {
+    const b = extractTaxBreakdown(['合計 ¥1,100(内消費税 ¥100)'])
+    expect(b?.total).toBe(1100)
+    const c = extractTaxBreakdown(['10%対象 ¥1,100(内消費税 ¥100)'])
+    expect(c?.lines[0]).toMatchObject({ rate: 10, base: 1100, tax: 100, mode: '内税', ok: true })
+  })
+  it('respects explicit tax-included label (R10)', () => {
+    const b = extractTaxBreakdown(['10%対象 税込 ¥1,000', '消費税(10%) ¥100', '合計 ¥1,000'])
+    expect(b?.lines[0].ok).toBe(false)
+    expect(checkTaxConsistency(['10%対象(税抜) ¥1,000', '消費税(10%) ¥100'])?.ok).toBe(true)
+  })
+  it('treats tomorrow as a future date (R11)', () => {
+    expect(parseDate('2026/10/10', today)?.future).toBe(true)
+    expect(parseDate('2026/10/09', today)?.future).toBe(false)
+  })
+})
