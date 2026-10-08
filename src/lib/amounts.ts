@@ -3,7 +3,8 @@
  * 精算チェック用に、インボイスごとの金額(総額)も決める。
  */
 import type { Rect } from './image'
-import { normalizeRow, parseAmounts, repairKeywords, type TextRow } from './requirements'
+import { normalizeRow, repairKeywords, type TextRow } from './requirements'
+import { moneySegments } from './money'
 import { inferTable, type TableModel } from './table'
 
 export type LineKind = 'item' | 'total' | 'tax' | 'payment' | 'other'
@@ -13,6 +14,8 @@ export interface LineItem {
   amount: number
   rect: Rect
   kind: LineKind
+  /** 「合計」の文字が読めなかった行を、金額の並びから合計行と推定した */
+  inferred?: boolean
 }
 
 export interface AmountSummary {
@@ -37,6 +40,25 @@ const TAX_RE = /(消費税|税額|内税|外税|税等)/
 const OTHER_RE = /(釣|残高|ポイント|電話|TEL|FAX|〒|No\.|番号|口座|会員)/i
 /** 支払いの行(現金・カード・電子マネー)。合計の書かれていないレシートでは、これが合計の目安になる */
 const PAYMENT_RE = /(支払|お預|預り|現金|クレジット|カード|nanaco|Suica|PASMO|ICOCA|PayPay|楽天|電子マネー|WAON|Edy|QUICPay|d払い|au\s?PAY)/i
+/** 値引き・返品(符号が無くてもマイナスとして集計する) */
+const DISCOUNT_RE = /(値引|割引|値割|返品|返金|クーポン|ディスカウント|OFF\b)/i
+/** 行を見出しの文字から分類する */
+function classify(n: string): LineKind {
+  return TAX_RE.test(n)
+    ? 'tax'
+    : OTHER_RE.test(n)
+      ? 'other'
+      : (TOTAL_RE.test(n) || LEADING_TOTAL_RE.test(n)) && !SUBTOTAL_RE.test(n) && !/お預|預り/.test(n)
+        ? 'total'
+        : PAYMENT_RE.test(n)
+          ? 'payment'
+          : SUBTOTAL_RE.test(n)
+            ? 'other'
+            : 'item'
+}
+/** 見出しに意味のある文字(かな・漢字・英字)があるか */
+const hasWords = (s: string) => /[\u3040-\u30ff\u4e00-\u9fffA-Za-z]/.test(s)
+
 /** ¥・円が無くても金額とみなしてよい表(見出しに「料金」「金額」「(円)」がある) */
 const MONEY_HEADER_RE = /(料金|金額|\(円\)|円\)|運賃|通行料)/
 
@@ -60,42 +82,57 @@ export function extractAmounts(rows: TextRow[]): AmountSummary {
   const table = inferTable(rows)
   const items: LineItem[] = []
   for (const [ri, { r, n }] of norm.entries()) {
-    const amounts = parseAmounts(n)
-    let amount = table?.rowAmounts[ri] ?? (amounts.length ? amounts[amounts.length - 1] : null)
-    if (amount === null && moneyTable && !table) {
+    const push = (amount: number, kind: LineKind) => {
+      // 値引き・返品は符号が無くてもマイナス
+      if (kind === 'item' && amount > 0 && DISCOUNT_RE.test(n)) amount = -amount
+      items.push({ text: n, amount, rect: r.rect, kind })
+    }
+    const tableAmount = table?.rowAmounts[ri] ?? null
+    if (tableAmount !== null) {
+      push(tableAmount, classify(n))
+      continue
+    }
+    // 1行に意味の違う金額が並ぶ(「合計 ¥1,100(内消費税 ¥100)」)ことがあるので、金額ごとに見出しで分類する。
+    // 同じ種類の金額が並ぶ(単価と金額など)ときは右端(最後)の金額を採る
+    const segs = moneySegments(n)
+    if (segs.length === 0) {
+      if (!moneyTable || table) continue
       // 見出し行(数値なし)や日付だけの行は除く
       if (MONEY_HEADER_RE.test(n) && !/\d{2,}/.test(n.replace(/\(円\)/, ''))) continue
-      amount = bareAmount(n)
+      const v = bareAmount(n)
+      if (v !== null) push(v, classify(n))
+      continue
     }
-    if (amount === null) continue
-    const kind: LineKind = TAX_RE.test(n)
-      ? 'tax'
-      : OTHER_RE.test(n)
-        ? 'other'
-        : (TOTAL_RE.test(n) || LEADING_TOTAL_RE.test(n)) && !SUBTOTAL_RE.test(n) && !/お預|預り/.test(n)
-          ? 'total'
-          : PAYMENT_RE.test(n)
-            ? 'payment'
-            : SUBTOTAL_RE.test(n)
-              ? 'other'
-              : 'item'
-    items.push({ text: n, amount, rect: r.rect, kind })
+    if (segs.length === 1) {
+      push(segs[0].value, classify(n))
+      continue
+    }
+    const byKind = new Map<LineKind, number>()
+    let prev: LineKind | null = null
+    for (const g of segs) {
+      const k: LineKind = hasWords(g.label) ? classify(g.label) : prev ?? classify(n)
+      byKind.set(k, g.value)
+      prev = k
+    }
+    for (const [k, v] of byKind) push(v, k)
   }
-  // 「合計」の文字が読めなかった合計行の推定: それより上の明細の合計(または+消費税)と同じ金額の明細は合計行とみなす
-  // (税率ごとの「対象」小計+消費税 と同じ金額も合計行とみなす)
+  // 「合計」の文字が読めなかった合計行の推定: 明示的な合計行が無く、最後の明細の金額が
+  // それより上の明細の合計 + 消費税(または税率ごとの「対象」小計 + 消費税)と同じなら合計行とみなす。
+  // 品名のある明細(商品C ¥300 = 100 + 200 など)を、金額の一致だけで合計にしない
+  const hasTotal = items.some((i) => i.kind === 'total')
+  const lastItem = [...items].reverse().find((i) => i.kind === 'item')
   let running = 0
   let runningTax = 0
   let runningSub = 0
   let count = 0
   for (const it of items) {
     if (it.kind === 'item') {
-      const asTotal =
-        count >= 2 &&
-        (it.amount === running ||
-          (runningTax > 0 && Math.abs(it.amount - running - runningTax) <= 1) ||
-          (runningSub > 0 && runningTax > 0 && Math.abs(it.amount - runningSub - runningTax) <= 1))
-      if (asTotal) {
+      const withTax = (runningTax > 0 && Math.abs(it.amount - running - runningTax) <= 1) || (runningSub > 0 && runningTax > 0 && Math.abs(it.amount - runningSub - runningTax) <= 1)
+      const label = it.text.replace(/[¥\d,.\-\s円()]/g, '')
+      const plain = it.amount === running && label.length <= 1
+      if (!hasTotal && it === lastItem && count >= 2 && (withTax || plain)) {
         it.kind = 'total'
+        it.inferred = true
         continue
       }
       running += it.amount
@@ -115,7 +152,7 @@ export function extractAmounts(rows: TextRow[]): AmountSummary {
   }
   const taxTotal = items.filter((i) => i.kind === 'tax').reduce((s, i) => s + i.amount, 0)
   let match: AmountSummary['match'] = null
-  if (docTotal !== null && itemsSum > 0) {
+  if (docTotal !== null && items.some((i) => i.kind === 'item')) {
     if (itemsSum === docTotal) match = 'equal'
     else if (taxTotal > 0 && Math.abs(itemsSum + taxTotal - docTotal) <= 1) match = 'equalWithTax'
     else match = 'diff'
@@ -131,6 +168,6 @@ export function sumSelected(items: LineItem[], selected: boolean[]): number {
 /** インボイスの金額(精算チェック用): 記載の合計 → 明細の合計 の順 */
 export function invoiceAmount(a: AmountSummary): { value: number; source: 'total' | 'items' } | null {
   if (a.docTotal !== null) return { value: a.docTotal, source: 'total' }
-  if (a.itemsSum > 0) return { value: a.itemsSum, source: 'items' }
+  if (a.items.some((i) => i.kind === 'item')) return { value: a.itemsSum, source: 'items' }
   return null
 }

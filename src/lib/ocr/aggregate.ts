@@ -61,9 +61,17 @@ export interface Candidate {
   shadowed: boolean
 }
 
-/** T番号として有力か(T付き or 登録番号の近く、かつ商品コードらしくない) */
+/**
+ * T番号として有力か(実際に読めた番号で、T付き or 登録番号の近く、かつ商品コードらしくない)。
+ * 検算NGの読みを1桁補正した推定値は含めない(目視確認が必要な「補正候補」として別に扱う)
+ */
 export function isPrimary(c: Candidate): boolean {
-  return c.valid && (c.hasT || c.context) && !c.likelyJan && !c.shadowed
+  return c.valid && c.kind !== 'corrected' && (c.hasT || c.context) && !c.likelyJan && !c.shadowed
+}
+
+/** 1桁補正による推定の候補(T付き or 登録番号の近く)。確定せず、確認待ちとして示す */
+export function isSuggestion(c: Candidate): boolean {
+  return c.valid && c.kind === 'corrected' && (c.hasT || c.context) && !c.likelyJan && !c.shadowed
 }
 
 export function readingWeight(r: Reading): number {

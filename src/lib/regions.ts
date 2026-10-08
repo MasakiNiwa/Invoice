@@ -113,6 +113,41 @@ export function clusterBoxes(input: Rect[], linkFactor = 2.2, separated?: (a: Re
     }
   }
 
+  // 横に並んだ塊で、行の高さがそろっている(表の「品名」の列と「金額」の列など)ものは同じ書類。
+  // 同じひな形の書類が横に並んでいてまとめすぎても、後の段階で表題・登録番号ごとに分けられる
+  const aligned = (A: DocCluster, B: DocCluster) => {
+    const [small, other] = A.boxes.length <= B.boxes.length ? [A, B] : [B, A]
+    const along = (r: Rect) => (A.vertical ? r.x + r.w / 2 : r.y + r.h / 2)
+    const thick = (r: Rect) => Math.min(r.w, r.h)
+    let hit = 0
+    for (const b of small.boxes) {
+      if (other.boxes.some((o) => Math.abs(along(o) - along(b)) < Math.min(thick(o), thick(b)) * 0.3 && Math.max(thick(o), thick(b)) < Math.min(thick(o), thick(b)) * 1.6)) hit++
+    }
+    return hit >= Math.max(2, small.boxes.length * 0.5)
+  }
+  for (let again = true; again; ) {
+    again = false
+    for (let i = 0; i < clusters.length && !again; i++) {
+      for (let j = i + 1; j < clusters.length && !again; j++) {
+        const A = clusters[i]
+        const B = clusters[j]
+        if (A.vertical !== B.vertical) continue
+        const a = A.rect
+        const b = B.rect
+        // 行と直交する方向(横書きなら縦方向)の重なりと、行に沿った方向の隙間
+        const overlap = A.vertical ? Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) : Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+        const shorter = A.vertical ? Math.min(a.w, b.w) : Math.min(a.h, b.h)
+        const gap = A.vertical ? Math.max(0, a.y - (b.y + b.h), b.y - (a.y + a.h)) : Math.max(0, a.x - (b.x + b.w), b.x - (a.x + a.w))
+        // (表の列は A4 の幅いっぱいに離れることがあるので、行がそろっていれば遠くてもよい)
+        if (overlap < shorter * 0.5 || gap > globalH * 30) continue
+        if (!aligned(A, B) || separated?.(a, b)) continue
+        clusters[i] = toCluster([...A.boxes, ...B.boxes])
+        clusters.splice(j, 1)
+        again = true
+      }
+    }
+  }
+
   // 枠が大きく重なる塊はまとめる
   let merged = true
   while (merged) {

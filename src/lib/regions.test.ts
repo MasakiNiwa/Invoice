@@ -28,4 +28,14 @@ describe('clusterBoxes', () => {
     const c = clusterBoxes([{ x: 50, y: -150, w: 80, h: 60 }, ...receipt(0, 0)])
     expect(c).toHaveLength(1)
   })
+  it('the name and amount columns of a table stay one document', () => {
+    const names = Array.from({ length: 6 }, (_, i) => ({ x: 0, y: i * 30, w: 80 + (i % 2) * 20, h: 20 }))
+    const amounts = Array.from({ length: 6 }, (_, i) => ({ x: 400, y: i * 30, w: 70, h: 20 }))
+    expect(clusterBoxes([...names, ...amounts])).toHaveLength(1)
+  })
+  it('side-by-side receipts with unaligned rows stay apart', () => {
+    const left = receipt(0, 0)
+    const right = receipt(600, 13).map((b, i) => ({ ...b, y: b.y + i * 7 }))
+    expect(clusterBoxes([...left, ...right])).toHaveLength(2)
+  })
 })

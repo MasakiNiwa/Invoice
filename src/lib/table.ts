@@ -37,10 +37,11 @@ const AMOUNT_HEADER_RE = /(金額|料金|通行料|税込|合計|価格)/
 /** 文字片が金額らしい数値ならその値 */
 export function numericValue(text: string): number | null {
   const t = normalizeRow(text).replace(/\s/g, '')
-  const m = /^[¥]?(\d{1,3}(?:,\d{3})+|\d{1,8})(?:円|-)?$/.exec(t)
+  const m = /^([-△▲])?[¥]?(-)?(\d{1,3}(?:,\d{3})+|\d{1,8})(?:円|-)?$/.exec(t)
   if (!m) return null
-  const v = Number(m[1].replace(/,/g, ''))
-  return Number.isFinite(v) ? v : null
+  const v = Number(m[3].replace(/,/g, ''))
+  if (!Number.isFinite(v)) return null
+  return (m[1] || m[2]) && v !== 0 ? -v : v
 }
 
 const median = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] : 0)

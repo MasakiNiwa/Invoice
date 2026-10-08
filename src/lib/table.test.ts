@@ -13,6 +13,8 @@ describe('table', () => {
   it('numeric cells', () => {
     expect(numericValue('¥1,320')).toBe(1320)
     expect(numericValue('2,810')).toBe(2810)
+    expect(numericValue('△100')).toBe(-100)
+    expect(numericValue('-¥1,000')).toBe(-1000)
     expect(numericValue('2026/09/01')).toBeNull()
   })
   it('amount column is taken from the header and right alignment, not quantities', () => {

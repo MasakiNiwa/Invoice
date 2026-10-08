@@ -34,7 +34,7 @@ export function CandidateCard({ c, rank, onHover }: Props) {
           <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300"><Vote size={12} /> 多数決で合成</span>
         )}
         {c.kind === 'corrected' && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300"><Sparkles size={12} /> 推定補正</span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/60 dark:text-amber-300"><Sparkles size={12} /> 推定補正(要確認)</span>
         )}
         {c.likelyJan && (
           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">商品コード(JAN)の可能性</span>
@@ -45,7 +45,7 @@ export function CandidateCard({ c, rank, onHover }: Props) {
         {!c.hasT && (
           <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300"><AlertTriangle size={12} /> T未検出</span>
         )}
-        <span className="ml-auto text-slate-500">信頼度 {c.confidence}%</span>
+        <span className="ml-auto text-slate-500" title="読み取りの票数・段階・T の有無などから計算した目安の点数です(正解の確率ではありません)">スコア {c.confidence}</span>
       </div>
 
       <div className="mt-2 font-mono text-2xl font-bold tracking-wider sm:text-3xl">{formatTNumber(c.digits)}</div>

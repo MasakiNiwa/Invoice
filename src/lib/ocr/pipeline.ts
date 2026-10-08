@@ -299,6 +299,40 @@ export async function runScan(
   const confident = () =>
     settings.earlyExit && isConfident(candidates) && new Set(candidates.filter(isPrimary).map((c) => c.digits)).size >= expectedNumbers
 
+  // PDF のテキスト層を先に読む。テキスト層だけで登録番号が確定すれば、OCR モデルの準備(初回ダウンロード)を省く
+  // ---------- Stage 0: PDF テキスト層 ----------
+  emit({ type: 'stage', stage: 'pdf', status: input.pdfTextItems ? 'start' : 'skip', note: input.pdfTextItems ? undefined : 'PDFではありません' })
+  if (input.pdfTextItems) {
+    const items = input.pdfTextItems
+    // 行ごと(y の近いもの)に連結して抽出
+    const rows: PdfTextItem[][] = []
+    for (const it of [...items].sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x)) {
+      const row = rows.find((r) => Math.abs(r[0].rect.y + r[0].rect.h / 2 - (it.rect.y + it.rect.h / 2)) < Math.max(r[0].rect.h, it.rect.h) * 0.5)
+      if (row) row.push(it)
+      else rows.push([it])
+    }
+    const found: Reading[] = []
+    for (const row of rows) {
+      row.sort((a, b) => a.rect.x - b.rect.x)
+      let text = ''
+      const spans: { start: number; end: number; it: PdfTextItem }[] = []
+      for (const it of row) {
+        if (text) text += ' '
+        spans.push({ start: text.length, end: text.length + it.str.length, it })
+        text += it.str
+      }
+      for (const m of extractTNumbers(text)) {
+        const hit = spans.filter((s) => s.end > m.start && s.start < m.end)
+        found.push({ digits: m.digits, hasT: m.hasT, valid: m.valid, conf: 99, stage: 'pdf', rect: unionRect(hit.map((h) => h.it.rect)), substitutions: m.substitutions, raw: m.raw, detail: 'テキスト層' })
+      }
+    }
+    if (items.length > 5) emit({ type: 'textrows', source: 'pdf', rows: groupFullRows(items.map((it) => ({ text: it.str, rect: it.rect }))) })
+    log(found.length ? 'success' : 'info', found.length ? `PDFのテキスト層から ${found.length} 件抽出` : `PDFテキスト層(${items.length}要素)にT番号は見当たりません`, 'pdf')
+    addReadings(found)
+    emit({ type: 'stage', stage: 'pdf', status: 'done' })
+    progress('pdf', 1)
+  }
+
   // ---------- モデル準備 ----------
   emit({ type: 'progress', value: 0.01, label: 'OCRモデル準備' })
   // 画像の表示を先に描画させる(重い処理の前にブラウザへ制御を返す)
@@ -307,7 +341,10 @@ export async function runScan(
   let engine: EngineId = settings.engine
   let layoutPool!: OcrBackend
   let digitPool!: OcrBackend
-  if (engine === 'paddle') {
+  const ocrNeeded = !(confident() && input.pdfTextItems && input.pdfTextItems.length > 5)
+  if (!ocrNeeded) {
+    log('info', 'PDFのテキスト層で読み取れたため、文字認識(OCR)は使いません')
+  } else if (engine === 'paddle') {
     const paddle = getPaddle(settings.paddleBackend)
     log('info', 'PaddleOCR(PP-OCRv5)を準備中…初回はモデル(約50MB)のダウンロードに時間がかかります')
     try {
@@ -319,7 +356,7 @@ export async function runScan(
       engine = 'tesseract'
     }
   }
-  if (engine === 'tesseract') {
+  if (ocrNeeded && engine === 'tesseract') {
     const layoutLang = settings.useJapanese ? 'jpn+eng' : 'eng'
     layoutPool = getPool(layoutLang, 1)
     digitPool = getPool('eng', settings.workers)
@@ -328,8 +365,10 @@ export async function runScan(
   }
   check()
   emit({ type: 'model', status: 'ready', progress: 1 })
-  emit({ type: 'engine', engine, label: layoutPool.label })
-  log('info', `OCRエンジン: ${layoutPool.label}`)
+  if (ocrNeeded) {
+    emit({ type: 'engine', engine, label: layoutPool.label })
+    log('info', `OCRエンジン: ${layoutPool.label}`)
+  } else emit({ type: 'engine', engine, label: 'PDFテキスト層(OCRなし)' })
   const plan = (engine === 'paddle' ? PADDLE_PLANS : PLANS)[settings.strength]
 
   /** 切り出し → 前処理 → OCR → 読み取り登録 */
@@ -371,39 +410,6 @@ export async function runScan(
       results.push(...rs)
     }
     return results
-  }
-
-  // ---------- Stage 0: PDF テキスト層 ----------
-  emit({ type: 'stage', stage: 'pdf', status: input.pdfTextItems ? 'start' : 'skip', note: input.pdfTextItems ? undefined : 'PDFではありません' })
-  if (input.pdfTextItems) {
-    const items = input.pdfTextItems
-    // 行ごと(y の近いもの)に連結して抽出
-    const rows: PdfTextItem[][] = []
-    for (const it of [...items].sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x)) {
-      const row = rows.find((r) => Math.abs(r[0].rect.y + r[0].rect.h / 2 - (it.rect.y + it.rect.h / 2)) < Math.max(r[0].rect.h, it.rect.h) * 0.5)
-      if (row) row.push(it)
-      else rows.push([it])
-    }
-    const found: Reading[] = []
-    for (const row of rows) {
-      row.sort((a, b) => a.rect.x - b.rect.x)
-      let text = ''
-      const spans: { start: number; end: number; it: PdfTextItem }[] = []
-      for (const it of row) {
-        if (text) text += ' '
-        spans.push({ start: text.length, end: text.length + it.str.length, it })
-        text += it.str
-      }
-      for (const m of extractTNumbers(text)) {
-        const hit = spans.filter((s) => s.end > m.start && s.start < m.end)
-        found.push({ digits: m.digits, hasT: m.hasT, valid: m.valid, conf: 99, stage: 'pdf', rect: unionRect(hit.map((h) => h.it.rect)), substitutions: m.substitutions, raw: m.raw, detail: 'テキスト層' })
-      }
-    }
-    if (items.length > 5) emit({ type: 'textrows', source: 'pdf', rows: groupFullRows(items.map((it) => ({ text: it.str, rect: it.rect }))) })
-    log(found.length ? 'success' : 'info', found.length ? `PDFのテキスト層から ${found.length} 件抽出` : `PDFテキスト層(${items.length}要素)にT番号は見当たりません`, 'pdf')
-    addReadings(found)
-    emit({ type: 'stage', stage: 'pdf', status: 'done' })
-    progress('pdf', 1)
   }
 
   // ---------- 向きの自動補正(PaddleOCR・画像のみ) ----------

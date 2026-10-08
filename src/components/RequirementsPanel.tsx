@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleHelp, ClipboardCheck, MinusCircle, XCircle } from 'lucide-react'
 import type { Rect } from '../lib/image'
-import type { CheckStatus, RequirementReport, TextRow } from '../lib/requirements'
+import type { CheckStatus, DocKind, RequirementReport, TextRow } from '../lib/requirements'
 import { normalizeRow } from '../lib/requirements'
 
 const ICON: Record<CheckStatus, typeof CheckCircle2> = { ok: CheckCircle2, warn: CircleHelp, ng: XCircle, na: MinusCircle }
@@ -27,17 +27,33 @@ interface Props {
   /** 記載事項精査で読み直した行数 */
   refined?: number
   onHover?: (rects: Rect[] | null) => void
+  /** 書類の種類の指定(自動/適格請求書/簡易インボイス) */
+  docKind?: DocKind
+  onDocKind?: (k: DocKind) => void
 }
 
 /** 適格請求書の記載事項チェック(目安) */
-export function RequirementsPanel({ report, title, scanning, japaneseOff, rows, refined, onHover }: Props) {
+export function RequirementsPanel({ report, title, scanning, japaneseOff, rows, refined, onHover, docKind = 'auto', onDocKind }: Props) {
   return (
     <div className="card p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold">
         <ClipboardCheck size={16} className="text-teal-600" /> インボイス記載事項チェック{title && <span className="text-indigo-600 dark:text-indigo-300">({title})</span>}
         <span className="whitespace-nowrap rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-500 dark:bg-slate-800">目安</span>
         {!!refined && <span className="whitespace-nowrap rounded-full bg-pink-100 px-2 py-0.5 text-[10px] font-normal text-pink-700 dark:bg-pink-900/50 dark:text-pink-300">{refined}行を精査済み</span>}
-        {report?.simplified && <span className="ml-auto whitespace-nowrap rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-normal text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易インボイス(レシート)と判定</span>}
+        {report && (
+          <label className="ml-auto flex items-center gap-1 whitespace-nowrap text-[11px] font-normal text-slate-500" title="簡易インボイスを交付できるのは小売・飲食・タクシー等の事業者です。自動の判定が違うときは選び直してください">
+            書類の種類
+            <select
+              className={`rounded-lg border px-1.5 py-0.5 text-[11px] ${report.kindSource === 'auto-weak' ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200' : 'border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-900'}`}
+              value={docKind}
+              onChange={(e) => onDocKind?.(e.target.value as DocKind)}
+            >
+              <option value="auto">自動({report.simplified ? `簡易インボイス${report.kindSource === 'auto-weak' ? '?' : ''}` : '適格請求書'})</option>
+              <option value="normal">適格請求書</option>
+              <option value="simplified">簡易インボイス</option>
+            </select>
+          </label>
+        )}
       </div>
       {japaneseOff ? (
         <p className="text-xs text-slate-500">設定の「日本語レイアウト解析」がオフのため、チェックできません。</p>
