@@ -27,7 +27,7 @@ const SUMMARY = {
 
 export function batchToCsv(b: Batch): string {
   const q = (v: string) => `"${v.replace(/"/g, '""')}"`
-  const head = ['ファイル', 'ページ', 'インボイス', '登録番号', '公表サイト', '記載事項チェック', '簡易インボイス']
+  const head = ['ファイル', 'ページ', 'インボイス', '登録番号', '公表サイト', '金額', '記載事項チェック', '簡易インボイス']
   const rows = b.items.flatMap((it) =>
     it.invoices.map((inv) => [
       b.name,
@@ -35,6 +35,7 @@ export function batchToCsv(b: Batch): string {
       String(inv.index + 1),
       inv.digits ? `T${inv.digits}` : '',
       inv.digits ? invoiceKohyoUrl(inv.digits) : '',
+      inv.amount ? String(inv.amount.value) : '',
       inv.report?.summaryText ?? '',
       inv.report ? (inv.report.simplified ? 'はい' : 'いいえ') : '',
     ]),
@@ -98,6 +99,7 @@ export function BatchPanel({ batch, selected, onSelect, onStop }: Props) {
                   <span className="w-14 shrink-0 text-xs text-slate-500">p.{it.page}{it.invoices.length > 1 ? ` #${inv.index + 1}` : ''}</span>
                   <span className="font-mono font-semibold">{inv.digits ? formatTNumber(inv.digits) : <span className="font-sans text-xs font-normal text-slate-400">登録番号なし</span>}</span>
                   <span className={`rounded-full px-2 py-0.5 text-[11px] ${sm[1]}`}>{sm[0]}</span>
+                  {inv.amount && <span className="font-mono text-xs text-slate-600 dark:text-slate-300">¥{inv.amount.value.toLocaleString()}</span>}
                   {inv.digits && (
                     <a className="ml-auto text-teal-600 hover:underline" href={invoiceKohyoUrl(inv.digits)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="公表サイトで確認">
                       <ExternalLink size={14} />

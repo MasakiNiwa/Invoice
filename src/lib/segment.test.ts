@@ -31,6 +31,16 @@ describe('segmentInvoices', () => {
     expect(segs[1].rows.map((r) => r.text)).toContain('B店')
     expect(segs[1].rows.map((r) => r.text)).not.toContain('A店')
   })
+  it('receipt without registration number is its own invoice', () => {
+    const a = invoice(0, 0, '7123456789012', 'A交通')
+    const b = invoice(600, 0, '7810648631842', 'B交通')
+    const c = invoice(0, 500, '7123456789012', 'A交通')
+    const d = invoice(600, 500, '', '個人タクシー').map((r) => (r.text.startsWith('登録番号') ? { ...r, text: 'TEL 03-0000-0000' } : r))
+    const ts = [a[2], b[2], c[2]].map((r) => ({ digits: r.text.slice(-13), rect: r.rect }))
+    const segs = segmentInvoices([...a, ...b, ...c, ...d], ts, 1200, 1400)
+    expect(segs).toHaveLength(4)
+    expect(segs.filter((s) => !s.digits)).toHaveLength(1)
+  })
   it('two invoices stacked vertically (2x2 grid too)', () => {
     const rows = [...invoice(0, 0, '7123456789012', 'A'), ...invoice(0, 500, '7810648631842', 'B'), ...invoice(600, 0, '7000012050002', 'C'), ...invoice(600, 500, '1234567890128', 'D')]
     const ts = rows.filter((r) => r.text.startsWith('登録番号')).map((r) => ({ digits: r.text.slice(-13), rect: r.rect }))

@@ -79,6 +79,7 @@ export default function HistoryPage() {
                 <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px]">
                   {e.requirements && <span className={`rounded-full px-2 py-0.5 ${SUMMARY_STYLE[e.requirements.summary]}`}>{SUMMARY_LABEL[e.requirements.summary]}</span>}
                   {e.requirements?.simplified && <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">簡易</span>}
+                  {e.amount != null && <span className="font-mono text-slate-600 dark:text-slate-300">¥{e.amount.toLocaleString()}</span>}
                   <span className="text-slate-400">{e.engine}・{e.seconds.toFixed(1)}秒</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">

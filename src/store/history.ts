@@ -16,6 +16,8 @@ export interface HistoryEntry {
   requirements: { summary: CheckStatus; text: string; simplified: boolean } | null
   engine: string
   seconds: number
+  /** 金額(記載の合計など) */
+  amount?: number | null
 }
 
 const MAX = 50
@@ -42,12 +44,13 @@ export const useHistory = create<HistoryStore>()(
 /** CSV(Excel で文字化けしないよう BOM 付き UTF-8) */
 export function historyToCsv(entries: HistoryEntry[]): string {
   const q = (v: string) => `"${v.replace(/"/g, '""')}"`
-  const head = ['日時', 'ファイル名', '登録番号', '公表サイト', 'その他の候補', '記載事項チェック', '簡易インボイス', 'エンジン', '所要秒']
+  const head = ['日時', 'ファイル名', '登録番号', '公表サイト', '金額', 'その他の候補', '記載事項チェック', '簡易インボイス', 'エンジン', '所要秒']
   const rows = entries.map((e) => [
     new Date(e.at).toLocaleString('ja-JP'),
     e.name,
     e.digits ? `T${e.digits}` : '',
     e.digits ? `https://www.invoice-kohyo.nta.go.jp/regno-search/detail?selRegNo=${e.digits}` : '',
+    e.amount != null ? String(e.amount) : '',
     e.others.map((d) => `T${d}`).join(' '),
     e.requirements?.text ?? '',
     e.requirements ? (e.requirements.simplified ? 'はい' : 'いいえ') : '',

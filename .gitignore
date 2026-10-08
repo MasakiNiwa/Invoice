@@ -2,6 +2,7 @@ node_modules
 dist
 public/ocr
 public/paddle
+public/pdfjs
 *.log
 .DS_Store
 coverage

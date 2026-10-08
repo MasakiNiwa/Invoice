@@ -236,7 +236,7 @@ export function extractTaxBreakdown(lines: string[]): TaxBreakdown | null {
 }
 const ISSUER_RE = /(株式会社|有限会社|合同会社|合資会社|合名会社|一般社団法人|一般財団法人|公益社団法人|公益財団法人|NPO法人|医療法人|社会福祉法人|学校法人|\(株\)|\(有\)|㈱|㈲|事務所|商店|商事|店$|店\b|本店|支店|[^\s]店|食堂|[^\s]堂$|[^\s]屋$|亭|カフェ|クリニック|医院|病院|薬局|ホテル|旅館|工業|工房|製作所)/
 const RECIPIENT_RE = /(御中|様|殿)(?!式)/
-const RECEIPT_RE = /(領収書|領収証|レシート|お買上|お買い上げ|ご来店|お預り|お預かり|お釣|釣銭|POS|レジ|nanaco|Suica|PayPay|現金|クレジット)/i
+const RECEIPT_RE = /(領収書|領収証|レシート|お買上|お買い上げ|ご来店|お預り|お預かり|お釣|釣銭|POS|レジ|nanaco|Suica|PayPay|現金|クレジット|タクシー|運賃|乗車|駐車|ご利用料金)/i
 const RATE_RE = /(10|8)\s?%/
 const REDUCED_MARK_RE = /(軽減|※|\*|★|☆|#)/
 const TAX_RE = /(消費税|内税|外税|税額|税等|内消費税|うち税|税\s?¥)/
@@ -251,7 +251,9 @@ export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | nu
   const rows = rawRows.map((r) => ({ n: repairKeywords(normalizeRow(r.text)), r })).filter((x) => x.n.length > 0)
   const ev = (xs: { n: string; r: TextRow }[], k = 3) => ({ evidence: xs.slice(0, k).map((x) => x.n.slice(0, 40)), rects: xs.slice(0, k).map((x) => x.r.rect) })
   const items: RequirementItem[] = []
-  const simplified = rows.some((x) => RECEIPT_RE.test(x.n)) && !rows.some((x) => RECIPIENT_RE.test(x.n))
+  // 適格簡易請求書(小売・飲食・タクシー・駐車場など)。レシート・領収書には「〇〇様」と書かれていても簡易インボイスでよい。
+  // 「御中」宛ての請求書は通常の適格請求書として扱う
+  const simplified = rows.some((x) => RECEIPT_RE.test(x.n)) && !rows.some((x) => /御中/.test(x.n))
 
   // 1a. 登録番号
   items.push({
@@ -319,7 +321,12 @@ export function checkRequirements(rawRows: TextRow[], opts: { regNo: string | nu
 
   // 4. 税率ごとの合計額と適用税率
   const rateRows = rowsMatching(rows, RATE_RE)
-  const rateTotal = rateRows.filter((x) => TOTAL_RE.test(x.n) || (parseAmounts(x.n).length > 0 && !TAX_RE.test(x.n)))
+  let rateTotal = rateRows.filter((x) => TOTAL_RE.test(x.n) || (parseAmounts(x.n).length > 0 && !TAX_RE.test(x.n)))
+  // 税率が1種類だけで総額(合計・金額など)の記載があれば、それがその税率の合計額
+  const rates = new Set(rateRows.flatMap((x) => [...x.n.matchAll(/(10|8)\s?%/g)].map((m) => m[1])))
+  if (rateTotal.length === 0 && rates.size === 1) {
+    rateTotal = rows.filter((x) => (/(合計|総額|請求金額|領収金額|お買上)/.test(x.n) || /^(金額|運賃|料金)\s?[:：]?\s?[¥\d]/.test(x.n)) && parseAmounts(x.n).length > 0)
+  }
   items.push({
     id: 'rateTotal',
     label: '税率ごとの合計額・適用税率',

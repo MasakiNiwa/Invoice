@@ -81,16 +81,24 @@ export function xyCut(rows: TextRow[], rowH: number, pageW: number): TextRow[][]
   return out
 }
 
-export function segmentInvoices(rows: TextRow[], tNumbers: TNumberLocation[], pageW: number, pageH: number): InvoiceSegment[] {
+/** 表題(領収書・請求書など)らしい行。単独の短い行(「※この請求書は…」のような文中の語は除く) */
+export function findTitleRows(rows: TextRow[]): TextRow[] {
+  return rows.filter((r) => {
+    const t = repairKeywords(normalizeRow(r.text)).replace(/\s/g, '')
+    return t.length <= 10 && TITLE_RE.test(t)
+  })
+}
+
+/**
+ * @param titles 表題の位置(行を組み立て直した後に探したもの)。省略時は rows から探す。
+ *   PDF のテキスト層では「領 収 書」が1文字ずつの要素になっていることがあるため
+ */
+export function segmentInvoices(rows: TextRow[], tNumbers: TNumberLocation[], pageW: number, pageH: number, titles?: Rect[]): InvoiceSegment[] {
   const whole = (): InvoiceSegment[] => [
     { index: 0, rect: rows.length ? union(rows.map((r) => r.rect)) : { x: 0, y: 0, w: pageW, h: pageH }, rows, digits: tNumbers[0]?.digits ?? null },
   ]
   const distinct = [...new Map(tNumbers.map((t) => [t.digits, t])).values()]
-  // 表題は単独の短い行(「※この請求書は…」のような文中の語は除く)
-  const titleRows = rows.filter((r) => {
-    const t = repairKeywords(normalizeRow(r.text)).replace(/\s/g, '')
-    return t.length <= 10 && TITLE_RE.test(t)
-  })
+  const titleRows: { rect: Rect }[] = titles ? titles.map((rect) => ({ rect })) : findTitleRows(rows)
   if (rows.length < 4 || (distinct.length <= 1 && titleRows.length <= 1)) return whole()
 
   const rowH = median(rows.map((r) => r.rect.h)) || 20
@@ -101,7 +109,9 @@ export function segmentInvoices(rows: TextRow[], tNumbers: TNumberLocation[], pa
   type Seed = { key: string; digits: string | null; blocks: number[] }
   const seeds: Seed[] = []
   const blockOf = (p: { x: number; y: number }) => blocks.findIndex((b) => inside(p, b.rect))
-  if (distinct.length >= 2) {
+  // 表題(領収書など)の方が多いときは表題を種にする(登録番号の無い領収書や、同じ事業者の領収書が並ぶ場合)
+  const useTitles = titleRows.length >= 2 && titleRows.length > distinct.length
+  if (!useTitles && distinct.length >= 2) {
     for (const t of tNumbers) {
       const bi = blockOf(center(t.rect))
       if (bi < 0) continue

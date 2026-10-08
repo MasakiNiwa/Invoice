@@ -46,7 +46,17 @@ export interface OpenedPdf {
 export async function openPdf(file: Blob): Promise<OpenedPdf> {
   const pdfjs = await loadPdfJs()
   const data = new Uint8Array(await file.arrayBuffer())
-  const task = pdfjs.getDocument({ data })
+  const base = new URL('./pdfjs/', document.baseURI).href
+  const task = pdfjs.getDocument({
+    data,
+    // 日本語 PDF はフォントを埋め込んでいないことが多い(ETC 利用照会・官公庁の帳票など)。
+    // 文字対応表(CMap)と標準フォントが無いと、文字が表示されずテキスト層も取れない
+    cMapUrl: `${base}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${base}standard_fonts/`,
+    wasmUrl: `${base}wasm/`,
+    useSystemFonts: true,
+  })
   const doc = await task.promise
   return {
     numPages: doc.numPages,
