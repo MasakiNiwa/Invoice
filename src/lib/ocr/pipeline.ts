@@ -44,6 +44,8 @@ export type ScanEvent =
 export interface ScanInput {
   canvas: HTMLCanvasElement
   pdfTextItems?: PdfTextItem[]
+  /** 向き・傾きを補正済み(自動回転を省略) */
+  normalized?: boolean
 }
 
 export const STAGES: StageId[] = ['pdf', 'layout', 'anchor', 'textline', 'tile', 'detail']
@@ -219,7 +221,7 @@ export function readingsFromOcr(res: OcrResult, mapRect: (r: Rect) => Rect, stag
  * 横長の行を 0°/180° で読み比べて信頼度が大きく違えば上下逆、と判断する。
  * 返り値は時計回りに回すべき角度(不要なら null)。
  */
-async function detectRotation(src: HTMLCanvasElement, backend: OcrBackend, signal: AbortSignal): Promise<90 | 180 | 270 | null> {
+export async function detectRotation(src: HTMLCanvasElement, backend: OcrBackend, signal?: AbortSignal): Promise<90 | 180 | 270 | null> {
   const { canvas: small, scale } = downscale(src, 1280)
   const det = await backend.recognize(small, { psm: '11', detectOnly: true }, signal)
   const boxes = det.lines.map((l) => l.rect).filter((r) => r.w * r.h > 60)
@@ -405,7 +407,7 @@ export async function runScan(
   }
 
   // ---------- 向きの自動補正(PaddleOCR・画像のみ) ----------
-  if (engine === 'paddle' && settings.autoRotate && !confident() && !(input.pdfTextItems && input.pdfTextItems.length > 5)) {
+  if (engine === 'paddle' && settings.autoRotate && !input.normalized && !confident() && !(input.pdfTextItems && input.pdfTextItems.length > 5)) {
     const rot = await detectRotation(src, layoutPool, signal)
     if (rot) {
       src = rotateCanvas(src, rot)

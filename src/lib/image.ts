@@ -267,3 +267,30 @@ export function rotateCanvas(src: HTMLCanvasElement, deg: 90 | 180 | 270): HTMLC
   ctx.drawImage(src, -src.width / 2, -src.height / 2)
   return c
 }
+
+/** 任意の角度(度、時計回り)で回転。はみ出さないよう広げ、余白は白で埋める */
+export function rotateCanvasDeg(src: HTMLCanvasElement, deg: number): HTMLCanvasElement {
+  const t = (deg * Math.PI) / 180
+  const c = Math.abs(Math.cos(t))
+  const s = Math.abs(Math.sin(t))
+  const out = createCanvas(src.width * c + src.height * s, src.width * s + src.height * c)
+  const ctx = ctx2d(out)
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.imageSmoothingQuality = 'high'
+  ctx.translate(out.width / 2, out.height / 2)
+  ctx.rotate(t)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  return out
+}
+
+/** 矩形を切り出した Canvas(範囲外は白) */
+export function cropRect(src: HTMLCanvasElement, r: Rect): HTMLCanvasElement {
+  const q = clampRect(r, src.width, src.height)
+  const out = createCanvas(q.w, q.h)
+  const ctx = ctx2d(out)
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.drawImage(src, q.x, q.y, q.w, q.h, 0, 0, q.w, q.h)
+  return out
+}

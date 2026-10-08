@@ -4,8 +4,9 @@
  */
 import type { Rect } from './image'
 import { normalizeRow, parseAmounts, repairKeywords, type TextRow } from './requirements'
+import { inferTable, type TableModel } from './table'
 
-export type LineKind = 'item' | 'total' | 'tax' | 'other'
+export type LineKind = 'item' | 'total' | 'tax' | 'payment' | 'other'
 
 export interface LineItem {
   text: string
@@ -24,6 +25,8 @@ export interface AmountSummary {
   taxTotal: number
   /** 明細の合計と記載の合計の照合 */
   match: 'equal' | 'equalWithTax' | 'diff' | null
+  /** 推定した表の構造(金額の列) */
+  table: TableModel | null
 }
 
 const TOTAL_RE = /(合計|総額|総計|請求金額|ご請求|御請求|お支払|支払金額|領収金額|ご利用額|ご利用金額|利用金額合計|税込金額|料金合計|お買上)/
@@ -31,7 +34,9 @@ const TOTAL_RE = /(合計|総額|総計|請求金額|ご請求|御請求|お支�
 const LEADING_TOTAL_RE = /^(金額|運賃|料金|領収額|ご料金)\s?[:：]?\s?[¥\d]/
 const SUBTOTAL_RE = /(小計|対象|内訳)/
 const TAX_RE = /(消費税|税額|内税|外税|税等)/
-const OTHER_RE = /(お預|預り|釣|残高|ポイント|電話|TEL|FAX|〒|No\.|番号|口座|会員)/i
+const OTHER_RE = /(釣|残高|ポイント|電話|TEL|FAX|〒|No\.|番号|口座|会員)/i
+/** 支払いの行(現金・カード・電子マネー)。合計の書かれていないレシートでは、これが合計の目安になる */
+const PAYMENT_RE = /(支払|お預|預り|現金|クレジット|カード|nanaco|Suica|PASMO|ICOCA|PayPay|楽天|電子マネー|WAON|Edy|QUICPay|d払い|au\s?PAY)/i
 /** ¥・円が無くても金額とみなしてよい表(見出しに「料金」「金額」「(円)」がある) */
 const MONEY_HEADER_RE = /(料金|金額|\(円\)|円\)|運賃|通行料)/
 
@@ -51,11 +56,13 @@ function bareAmount(n: string): number | null {
 export function extractAmounts(rows: TextRow[]): AmountSummary {
   const norm = rows.map((r) => ({ r, n: repairKeywords(normalizeRow(r.text)) }))
   const moneyTable = norm.some((x) => MONEY_HEADER_RE.test(x.n))
+  // 表の構造が分かれば、各行の金額は「金額の列」の数値から取る
+  const table = inferTable(rows)
   const items: LineItem[] = []
-  for (const { r, n } of norm) {
+  for (const [ri, { r, n }] of norm.entries()) {
     const amounts = parseAmounts(n)
-    let amount = amounts.length ? amounts[amounts.length - 1] : null
-    if (amount === null && moneyTable) {
+    let amount = table?.rowAmounts[ri] ?? (amounts.length ? amounts[amounts.length - 1] : null)
+    if (amount === null && moneyTable && !table) {
       // 見出し行(数値なし)や日付だけの行は除く
       if (MONEY_HEADER_RE.test(n) && !/\d{2,}/.test(n.replace(/\(円\)/, ''))) continue
       amount = bareAmount(n)
@@ -63,11 +70,15 @@ export function extractAmounts(rows: TextRow[]): AmountSummary {
     if (amount === null) continue
     const kind: LineKind = TAX_RE.test(n)
       ? 'tax'
-      : (TOTAL_RE.test(n) || LEADING_TOTAL_RE.test(n)) && !SUBTOTAL_RE.test(n)
-        ? 'total'
-        : SUBTOTAL_RE.test(n) || OTHER_RE.test(n)
-          ? 'other'
-          : 'item'
+      : OTHER_RE.test(n)
+        ? 'other'
+        : (TOTAL_RE.test(n) || LEADING_TOTAL_RE.test(n)) && !SUBTOTAL_RE.test(n) && !/お預|預り/.test(n)
+          ? 'total'
+          : PAYMENT_RE.test(n)
+            ? 'payment'
+            : SUBTOTAL_RE.test(n)
+              ? 'other'
+              : 'item'
     items.push({ text: n, amount, rect: r.rect, kind })
   }
   // 「合計」の文字が読めなかった合計行の推定: それより上の明細の合計(または+消費税)と同じ金額の明細は合計行とみなす
@@ -94,7 +105,14 @@ export function extractAmounts(rows: TextRow[]): AmountSummary {
   }
   const itemsSum = items.filter((i) => i.kind === 'item').reduce((s, i) => s + i.amount, 0)
   const totals = items.filter((i) => i.kind === 'total').map((i) => i.amount)
-  const docTotal = totals.length ? Math.max(...totals) : null
+  let docTotal = totals.length ? Math.max(...totals) : null
+  if (docTotal === null) {
+    // 合計の行が無いレシート: 支払いの金額(お預りは除く) → 税込の「対象」小計の合計 の順で合計とみなす
+    const pays = items.filter((i) => i.kind === 'payment' && !/お預|預り/.test(i.text)).map((i) => i.amount)
+    const subs = items.filter((i) => i.kind === 'other' && /対象/.test(i.text) && /(税込|内税|\()/.test(i.text)).reduce((s, i) => s + i.amount, 0)
+    if (pays.length) docTotal = Math.max(...pays)
+    else if (subs > 0) docTotal = subs
+  }
   const taxTotal = items.filter((i) => i.kind === 'tax').reduce((s, i) => s + i.amount, 0)
   let match: AmountSummary['match'] = null
   if (docTotal !== null && itemsSum > 0) {
@@ -102,7 +120,7 @@ export function extractAmounts(rows: TextRow[]): AmountSummary {
     else if (taxTotal > 0 && Math.abs(itemsSum + taxTotal - docTotal) <= 1) match = 'equalWithTax'
     else match = 'diff'
   }
-  return { items, itemsSum, docTotal, taxTotal, match }
+  return { items, itemsSum, docTotal, taxTotal, match, table }
 }
 
 /** 選んだ明細だけで合計し直す(画面でチェックを外したとき用) */

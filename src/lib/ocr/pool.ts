@@ -9,7 +9,16 @@ import type { OcrBackend } from './engine'
 
 export interface OcrSymbol { text: string; conf: number; rect: Rect }
 export interface OcrWord { text: string; conf: number; rect: Rect; symbols: OcrSymbol[] }
-export interface OcrLine { text: string; conf: number; rect: Rect; words: OcrWord[] }
+export interface OcrLine {
+  text: string
+  conf: number
+  rect: Rect
+  words: OcrWord[]
+  /** 文字行の傾き(度、画像座標で時計回りが正)。PaddleOCR の検出時のみ */
+  angle?: number
+  /** 文字行の長さ÷太さ(細長いほど傾きが信頼できる) */
+  elongation?: number
+}
 export interface OcrResult { text: string; conf: number; lines: OcrLine[] }
 
 export interface OcrParams {

@@ -9,11 +9,14 @@ import { ScanLog } from '../components/ScanLog'
 import { StageStepper } from '../components/StageStepper'
 import { useScan, type ScanState } from '../hooks/useScan'
 import { analyzeScan, type InvoiceResult } from '../lib/analyze'
-import { BatchPanel, type Batch } from '../components/BatchPanel'
+import { applyNormalization, findDocuments, type FoundDocument } from '../lib/documents'
+import { getPaddle } from '../lib/ocr/paddle'
+import { BatchPanel, type Batch, type BatchItem } from '../components/BatchPanel'
 import { AmountsPanel } from '../components/AmountsPanel'
 import { SettlementPanel, type SettlementEntry } from '../components/SettlementPanel'
 import { blobToCanvas, rotateCanvas } from '../lib/image'
-import { isPdf, openPdf, type OpenedPdf, type PdfTextItem } from '../lib/pdf'
+import { isPdf, openPdf, type OpenedPdf, type PdfDiagnostics, type PdfTextItem } from '../lib/pdf'
+import { PdfInfo } from '../components/PdfInfo'
 import { makeSampleInvoice } from '../lib/sample'
 import { useSettings } from '../store/settings'
 import { isPrimary } from '../lib/ocr/aggregate'
@@ -29,6 +32,12 @@ interface Doc {
   name: string
   canvas: HTMLCanvasElement
   pdf?: { file: File; page: number; numPages: number; textItems: PdfTextItem[] }
+  /** 向き・傾きを補正済み */
+  normalized?: boolean
+  /** 書類の分割・補正の内容(表示用) */
+  note?: string
+  /** PDF の診断情報(表示がおかしいときの手がかり) */
+  diag?: PdfDiagnostics
 }
 
 /** 一括読み取りでの PDF ページの解像度(選択時に同じ座標で再描画するため固定) */
@@ -70,7 +79,7 @@ export default function ScanPage() {
   const pdfRef = useRef<OpenedPdf | null>(null)
   const stopRef = useRef(false)
   /** 一括読み取りで選んだページの結果(null なら現在のスキャン) */
-  const [selected, setSelected] = useState<{ page: number; state: ScanState } | null>(null)
+  const [selected, setSelected] = useState<{ id: number; state: ScanState } | null>(null)
   /** 表示中のインボイス(1枚に複数あるとき) */
   const [invIdx, setInvIdx] = useState(0)
 
@@ -98,7 +107,7 @@ export default function ScanPage() {
     setDoc(d)
     setSelected(null)
     setInvIdx(0)
-    const final = await start({ canvas: d.canvas, pdfTextItems: d.pdf?.textItems })
+    const final = await start({ canvas: d.canvas, pdfTextItems: d.pdf?.textItems, normalized: d.normalized })
     if (!final) return null
     const img = final.image ?? d.canvas
     const invoices = analyzeScan(final.candidates, final.textRows?.rows ?? null, img.width, img.height)
@@ -122,35 +131,88 @@ export default function ScanPage() {
     setSelected(null)
   }
 
-  /** 複数ページの PDF を1ページずつ読み取る */
-  const runBatch = useCallback(async (file: File, pdf: OpenedPdf) => {
-    const total = Math.min(pdf.numPages, MAX_BATCH_PAGES)
-    stopRef.current = false
-    let b: Batch = { name: file.name, total, items: [], running: true, current: 1 }
-    setBatch(b)
-    for (let p = 1; p <= total && !stopRef.current; p++) {
-      b = { ...b, current: p }
-      setBatch(b)
-      const pg = await pdf.render(p, BATCH_SIDE)
-      if (stopRef.current) break
-      const d: Doc = { name: file.name, canvas: pg.canvas, pdf: { file, page: p, numPages: pdf.numPages, textItems: pg.textItems } }
-      const r = await runScan(d)
-      if (!r || r.final.status !== 'done') break
-      saveResults(`${file.name} p.${p}`, d.canvas, r.final, r.invoices)
-      b = { ...b, items: [...b.items, { page: p, state: r.final, invoices: r.invoices }] }
-      setBatch(b)
+  /** 画像(またはスキャンした PDF のページ)から書類を探して向き・傾きを直す。PaddleOCR のときだけ */
+  const splitDocuments = useCallback(async (canvas: HTMLCanvasElement): Promise<FoundDocument[] | null> => {
+    const st = useSettings.getState()
+    if (st.engine !== 'paddle' || !st.splitDocuments) return null
+    try {
+      const paddle = getPaddle(st.paddleBackend)
+      await paddle.init()
+      return await findDocuments(canvas, paddle)
+    } catch (e) {
+      console.warn('書類の検出に失敗しました', e)
+      return null
     }
-    setBatch({ ...b, running: false })
-  }, [runScan, saveResults])
+  }, [])
 
-  /** 一括読み取りの結果から、ページ・インボイスを選んで表示 */
-  const selectBatchItem = useCallback(async (page: number, inv: number) => {
-    const item = batch?.items.find((it) => it.page === page)
-    const pdf = pdfRef.current
-    if (!item || !pdf || !doc?.pdf) return
-    const pg = await pdf.render(page, BATCH_SIDE)
-    setDoc({ name: doc.name, canvas: pg.canvas, pdf: { ...doc.pdf, page, textItems: pg.textItems } })
-    setSelected({ page, state: item.state })
+  const docNote = (d: FoundDocument) =>
+    [d.rotation ? `${d.rotation}°回転` : '', d.skew ? `傾き ${d.skew > 0 ? '+' : ''}${d.skew.toFixed(1)}° 補正` : ''].filter(Boolean).join('・')
+
+  /** 書類・ページを1つずつ読み取って一覧にする(PDF の全ページ / 1枚の画像に写った複数の書類) */
+  const runBatch = useCallback(async (file: File, pdf: OpenedPdf | null, imageDocs?: FoundDocument[]) => {
+    const total = pdf ? Math.min(pdf.numPages, MAX_BATCH_PAGES) : imageDocs!.length
+    stopRef.current = false
+    let id = 0
+    let b: Batch = { name: file.name, kind: pdf ? 'pdf' : 'image', total, items: [], running: true, current: '', done: 0 }
+    setBatch(b)
+    const scanOne = async (d: Doc, label: string, extra: Partial<BatchItem>) => {
+      b = { ...b, current: label }
+      setBatch(b)
+      const r = await runScan(d)
+      if (!r || r.final.status !== 'done') return false
+      saveResults(`${file.name} ${label}`, d.canvas, r.final, r.invoices)
+      b = { ...b, items: [...b.items, { id: ++id, label, state: r.final, invoices: r.invoices, ...extra }] }
+      setBatch(b)
+      return true
+    }
+    if (imageDocs) {
+      for (let i = 0; i < imageDocs.length && !stopRef.current; i++) {
+        const f = imageDocs[i]
+        if (!(await scanOne({ name: file.name, canvas: f.canvas, normalized: true, note: docNote(f) }, `書類${i + 1}`, { canvas: f.canvas }))) break
+        b = { ...b, done: i + 1 }
+      }
+    } else if (pdf) {
+      for (let p = 1; p <= total && !stopRef.current; p++) {
+        b = { ...b, current: `${p} ページ目` }
+        setBatch(b)
+        const pg = await pdf.render(p, BATCH_SIDE)
+        if (stopRef.current) break
+        const pdfInfo = { file, page: p, numPages: pdf.numPages, textItems: pg.textItems }
+        // テキスト層の無い(スキャンした)ページは、書類の分割と向き・傾きの補正を行う
+        const docs = pg.textItems.length > 5 ? null : await splitDocuments(pg.canvas)
+        let ok = true
+        if (docs && docs.length > 1) {
+          for (let k = 0; k < docs.length && ok && !stopRef.current; k++) {
+            const f = docs[k]
+            ok = await scanOne({ name: file.name, canvas: f.canvas, normalized: true, note: docNote(f), diag: pg.diag, pdf: { ...pdfInfo, textItems: [] } }, `p.${p} 書類${k + 1}`, { page: p, norm: { rect: f.rect, rotation: f.rotation, skew: f.skew } })
+          }
+        } else if (docs && docs[0]) {
+          const f = docs[0]
+          ok = await scanOne({ name: file.name, canvas: f.canvas, normalized: true, note: docNote(f), diag: pg.diag, pdf: { ...pdfInfo, textItems: [] } }, `p.${p}`, { page: p, norm: { rect: f.rect, rotation: f.rotation, skew: f.skew } })
+        } else {
+          ok = await scanOne({ name: file.name, canvas: pg.canvas, diag: pg.diag, pdf: pdfInfo }, `p.${p}`, { page: p })
+        }
+        if (!ok) break
+        b = { ...b, done: p }
+      }
+    }
+    setBatch({ ...b, running: false, done: b.items.length ? b.done : 0 })
+  }, [runScan, saveResults, splitDocuments])
+
+  /** 一覧から書類(ページ)・インボイスを選んで表示 */
+  const selectBatchItem = useCallback(async (itemId: number, inv: number) => {
+    const item = batch?.items.find((it) => it.id === itemId)
+    if (!item) return
+    if (item.canvas) {
+      setDoc({ name: batch!.name, canvas: item.canvas, normalized: true })
+    } else {
+      const pdf = pdfRef.current
+      if (!pdf || !doc?.pdf || !item.page) return
+      const pg = await pdf.render(item.page, BATCH_SIDE)
+      const canvas = item.norm ? applyNormalization(pg.canvas, item.norm) : pg.canvas
+      setDoc({ name: doc.name, canvas, normalized: !!item.norm, diag: pg.diag, pdf: { ...doc.pdf, page: item.page, textItems: item.norm ? [] : pg.textItems } })
+    }
+    setSelected({ id: itemId, state: item.state })
     setInvIdx(inv)
   }, [batch, doc])
 
@@ -167,12 +229,37 @@ export default function ScanPage() {
           await runBatch(file, pdf)
           return
         }
+        // 1ページの PDF でも、スキャン(テキスト層なし)なら書類の分割・補正を試す
+        const one = await pdf.render(page)
+        if (one.textItems.length <= 5) {
+          setLoading('書類を探しています…')
+          const docs = await splitDocuments(one.canvas)
+          if (docs && docs.length > 1) {
+            setLoading(null)
+            await runBatch(file, null, docs)
+            return
+          }
+          if (docs?.[0]) {
+            scanDoc({ name: file.name, canvas: docs[0].canvas, normalized: true, note: docNote(docs[0]), diag: one.diag })
+            return
+          }
+        }
         const p = await pdf.render(page)
-        scanDoc({ name: file.name, canvas: p.canvas, pdf: { file, page: p.pageNumber, numPages: p.numPages, textItems: p.textItems } })
+        scanDoc({ name: file.name, canvas: p.canvas, diag: p.diag, pdf: { file, page: p.pageNumber, numPages: p.numPages, textItems: p.textItems } })
       } else if (file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|heic)$/i.test(file.name)) {
         closePdf()
         const canvas = await blobToCanvas(file)
-        scanDoc({ name: file.name, canvas })
+        // 書類が複数写っていれば分けて、それぞれ向き・傾きを直してから読み取る
+        setLoading('書類を探しています…')
+        const docs = await splitDocuments(canvas)
+        setLoading(null)
+        if (docs && docs.length > 1) {
+          await runBatch(file, null, docs)
+        } else if (docs?.[0]) {
+          scanDoc({ name: file.name, canvas: docs[0].canvas, normalized: true, note: docNote(docs[0]) })
+        } else {
+          scanDoc({ name: file.name, canvas })
+        }
       } else {
         setLoadError('対応していないファイル形式です(画像またはPDFを選んでください)')
       }
@@ -183,7 +270,7 @@ export default function ScanPage() {
       setLoading(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scanDoc, runBatch, batchPdf])
+  }, [scanDoc, runBatch, batchPdf, splitDocuments])
 
   // ページ全体でドラッグ&ドロップ・貼り付けを受け付ける
   useEffect(() => {
@@ -277,12 +364,12 @@ export default function ScanPage() {
   const settlement: SettlementEntry[] = batch
     ? batch.items.flatMap((it) =>
         it.invoices.map((v) => ({
-          key: `${it.page}-${v.index}`,
-          label: `p.${it.page}${it.invoices.length > 1 ? ` #${v.index + 1}` : ''}`,
+          key: `${it.id}-${v.index}`,
+          label: `${it.label}${it.invoices.length > 1 ? ` #${v.index + 1}` : ''}`,
           digits: v.digits,
           amount: v.amount?.value ?? null,
           estimated: v.amount?.source === 'items',
-          onSelect: batch.running ? undefined : () => void selectBatchItem(it.page, v.index),
+          onSelect: batch.running ? undefined : () => void selectBatchItem(it.id, v.index),
         })),
       )
     : invoices.map((v, i) => ({
@@ -339,6 +426,7 @@ export default function ScanPage() {
               <div className="mb-2 flex items-center gap-2 text-sm">
                 <span className="truncate font-medium">{doc.name}</span>
                 <span className="shrink-0 text-xs text-slate-400">{(viewImage ?? doc.canvas).width}×{(viewImage ?? doc.canvas).height}</span>
+                {doc.note && <span className="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-700 dark:bg-violet-900/50 dark:text-violet-300">{doc.note}</span>}
                 {view.rotation !== 0 && <span className="shrink-0 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/50 dark:text-sky-300">向きを自動補正</span>}
                 <span className="ml-auto flex shrink-0 gap-1">
                   <button type="button" className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:hover:bg-slate-800" title="左に回転して読み直す" disabled={busy} onClick={() => rotate(270)}>
@@ -355,7 +443,8 @@ export default function ScanPage() {
                     disabled={busy}
                     onChange={(e) => {
                       const n = Number(e.target.value)
-                      if (batch?.items.some((it) => it.page === n)) void selectBatchItem(n, 0)
+                      const hit = batch?.items.find((it) => it.page === n)
+                      if (hit) void selectBatchItem(hit.id, 0)
                       else void openFile(doc.pdf!.file, n)
                     }}
                   >
@@ -374,6 +463,7 @@ export default function ScanPage() {
                 segments={invoices.map((v, i) => ({ rect: v.rect, label: `インボイス ${i + 1}`, active: i === invIdx }))}
               />
               <div className="mt-2"><Legend /></div>
+              {doc.diag && <PdfInfo diag={doc.diag} />}
             </div>
             <ImageInput onFile={openFile} onSample={onSample} compact />
           </div>
@@ -425,8 +515,8 @@ export default function ScanPage() {
             {batch && (
               <BatchPanel
                 batch={batch}
-                selected={selected ? { page: selected.page, inv: invIdx } : null}
-                onSelect={(pg, i) => void selectBatchItem(pg, i)}
+                selected={selected ? { id: selected.id, inv: invIdx } : null}
+                onSelect={(itemId, i) => void selectBatchItem(itemId, i)}
                 onStop={stopBatch}
               />
             )}
