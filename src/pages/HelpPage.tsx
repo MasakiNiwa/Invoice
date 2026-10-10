@@ -98,14 +98,6 @@ export default function HelpPage() {
         </ul>
       </Section>
 
-      <Section title="Colab 版">
-        <p>
-          同じ画面を Google Colab で動かす版もあります。文字認識を Colab の GPU で行うので、スマホや古いパソコンでも軽く動き、モデルのダウンロードも不要です。
-          <a className="text-teal-600 underline" href="https://colab.research.google.com/github/MasakiNiwa/Invoice/blob/main/colab/Invoice_Colab.ipynb" target="_blank" rel="noreferrer">ノートブックを開く</a>
-          → セルを順に実行 → 表示されたリンクとパスワードでログインして使います。Colab 版では、画像を自分で起動した Colab のサーバーに送って処理します。
-        </p>
-      </Section>
-
       <Section title="よくある質問">
         <div className="space-y-2">
           <Faq q="画像はどこかに送信されますか?">いいえ。読み取りはすべてお使いのブラウザ内で行われます。初回のみ、OCRの学習データ(モデル)をCDNからダウンロードします。</Faq>
