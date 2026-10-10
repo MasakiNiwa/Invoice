@@ -30,7 +30,18 @@ GitHub Pages 版と**同じ画面(UI)**を、Google Colab の計算資源で動�
 
 - UI は GitHub Pages 版と同じビルドです。`./api/status` が応答すると「Colab サーバー」と判断し、文字認識をサーバーに任せます(設定で切り替え可)。
 - サーバーの文字認識(`server/invoice_server/ocr.py`)は、ブラウザ版(`src/lib/ocr/paddle-core.ts`)と同じ前処理・後処理で同じ形の結果を返します。読み取り・判定の流れ(多段 OCR、記載事項チェック、金額の集計など)は共通のまま使えます。
-- UI の取得は 2 通り: `pages`(公開中のビルド `https://masakiniwa.github.io/Invoice/colab/app.zip` をダウンロード)と `build`(指定したブランチのソースからビルド。開発中の版を試すとき)。
+- UI の取得は 3 通り: `pages`(公開中のビルド `https://masakiniwa.github.io/Invoice/colab/app.zip`)、`pages-dev`(開発版 `…/Invoice/dev/colab/app.zip`)、`build`(指定したブランチのソースからビルド。push 前の確認など)。
+- 起動時は、リンクが実際につながることを確かめてから表示します(Cloudflare は発行直後しばらく Error 1033 になるため。つながらなければ通信方式を変えて作り直します)。起動後も裏で見張り、サーバーやトンネルが止まったら自動で起動し直します。
+
+## リンクは 2 種類
+
+| | Colab 内のリンク(既定) | 公開リンク(Cloudflare クイックトンネル) |
+| --- | --- | --- |
+| 開ける人 | ノートブックを開いている Google アカウントでログインしたブラウザだけ(Google の認証+パスワード) | リンクとパスワードを知っている人(パスワードのみ) |
+| 経路 | Google のプロキシ | Cloudflare(通信は https。Cloudflare 側で中継される) |
+| 向いている使い方 | 自分で使う | 別のアカウント・端末(同僚など)から使う |
+
+自分だけで使うなら、公開リンクを作らない方が攻撃される入り口が少なく安全です。
 
 ## セキュリティ
 

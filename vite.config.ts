@@ -54,8 +54,8 @@ export default defineConfig({
         globIgnores: ['**/ocr/**', '**/paddle/**', '**/*.wasm'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: 'index.html',
-        // Colab 版サーバーのログイン画面と API はキャッシュせず、毎回サーバーへ
-        navigateFallbackDenylist: [/\/login$/, /\/api\//],
+        // Colab 版サーバーのログイン画面と API、開発版(/dev/)のページは本番のキャッシュから返さない
+        navigateFallbackDenylist: [/\/login$/, /\/api\//, /\/dev\//],
         runtimeCaching: [
           { urlPattern: /\.wasm$/, handler: 'CacheFirst', options: { cacheName: 'ocr-wasm', expiration: { maxEntries: 8 } } },
           { urlPattern: /\/ocr\//, handler: 'CacheFirst', options: { cacheName: 'ocr-tesseract', expiration: { maxEntries: 16 } } },
