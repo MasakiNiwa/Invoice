@@ -1,0 +1,7 @@
+# インボイス確認ツール(Colab 版)サーバーの依存パッケージ
+# GPU があるときは onnxruntime の代わりに onnxruntime-gpu を入れる(ノートブックが自動で選びます)
+fastapi>=0.115
+uvicorn>=0.30
+numpy>=1.26
+opencv-python-headless>=4.9
+onnxruntime>=1.20
