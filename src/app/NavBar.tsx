@@ -54,6 +54,9 @@ function HeaderActions() {
   )
 }
 
+/** GitHub Pages の開発版(dev ブランチのプレビュー、/Invoice/dev/)で開いている */
+const IS_DEV_PREVIEW = typeof location !== 'undefined' && /\/dev\/?$/.test(location.pathname.replace(/index\.html$/, ''))
+
 export function TopBar() {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85">
@@ -61,6 +64,7 @@ export function TopBar() {
         <NavLink to="/" className="flex min-w-0 items-center gap-2 font-bold">
           <img src="./favicon.svg" alt="" className="h-7 w-7 shrink-0" />
           <span className="truncate text-sm sm:text-base"><span className="hidden min-[400px]:inline">インボイス</span>確認ツール</span>
+          {IS_DEV_PREVIEW && <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/50 dark:text-amber-200">開発版</span>}
         </NavLink>
         <nav className="ml-auto hidden items-center gap-1 md:flex">
           {items.map(({ to, label, icon: Icon, end }) => (

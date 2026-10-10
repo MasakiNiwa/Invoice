@@ -7,8 +7,9 @@
     launcher.stop()                  # 停止
 
 source:
-  "pages" … GitHub Pages で公開中のビルド済み UI(colab/app.zip)をダウンロードして使う(速い)
-  "build" … このリポジトリ(ブランチ)のソースから UI をビルドする(開発中の版を試すとき)
+  "pages"     … GitHub Pages で公開中のビルド済み UI(colab/app.zip)をダウンロードして使う(速い)
+  "pages-dev" … GitHub Pages の開発版(dev ブランチ、/dev/colab/app.zip)を使う
+  "build"     … このリポジトリ(ブランチ)のソースから UI をビルドする(push 前の版を試すとき)
 """
 from __future__ import annotations
 
@@ -32,6 +33,8 @@ WORK = Path(os.environ.get("INVOICE_WORK", "/content" if Path("/content").exists
 APP_DIR = WORK / "invoice-app"
 LOG_DIR = WORK / "logs"
 PAGES_ZIP = "https://masakiniwa.github.io/Invoice/colab/app.zip"
+#: dev ブランチの開発版(GitHub Pages の /dev/)
+PAGES_DEV_ZIP = "https://masakiniwa.github.io/Invoice/dev/colab/app.zip"
 NODE_VERSION = "v22.12.0"
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 
@@ -66,11 +69,13 @@ def setup(source: str = "pages", install: bool = True) -> Path:
     if install:
         _install_python(has_gpu())
     if source == "pages":
-        _ui_from_pages()
+        _ui_from_pages(PAGES_ZIP)
+    elif source == "pages-dev":
+        _ui_from_pages(PAGES_DEV_ZIP)
     elif source == "build":
         _ui_from_source()
     else:
-        raise ValueError('source は "pages" か "build" を指定してください')
+        raise ValueError('source は "pages" / "pages-dev" / "build" のどれかを指定してください')
     v = _ui_version()
     print(f"UI の準備ができました: {APP_DIR}(v{v.get('version', '?')} {v.get('commit', '')})", flush=True)
     return APP_DIR
@@ -87,8 +92,8 @@ def _install_python(gpu: bool) -> None:
     _run([sys.executable, "-m", "pip", "install", "-q", *pkgs])
 
 
-def _ui_from_pages() -> None:
-    z = _download(PAGES_ZIP, WORK / "app.zip")
+def _ui_from_pages(url: str) -> None:
+    z = _download(url, WORK / "app.zip")
     if APP_DIR.exists():
         shutil.rmtree(APP_DIR)
     with zipfile.ZipFile(z) as f:
@@ -134,29 +139,47 @@ def _ui_version() -> dict:
 
 
 # --------------------------------------------------------------------------- 起動
-def start(port: int = 8765, tunnel: bool = True, password: str | None = None, show: bool = True) -> dict:
-    """サーバーと公開リンクを起動し、リンクとパスワードを表示する"""
+IN_COLAB = "COLAB_RELEASE_TAG" in os.environ or Path("/content").is_dir() and Path("/opt/google").is_dir()
+
+
+def start(port: int = 8765, tunnel: bool = True, password: str | None = None, show: bool = True, watch: bool = True) -> dict:
+    """サーバーと公開リンクを起動し、つながることを確かめてからリンクとパスワードを表示する。
+
+    watch=True のとき、裏で数秒ごとに見張り、サーバーやトンネルが止まったら自動で起動し直す。
+    """
     stop(quiet=True)
     if not (APP_DIR / "index.html").exists():
         raise RuntimeError("先に setup() を実行してください")
     password = password or secrets.token_urlsafe(9)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, INVOICE_PASSWORD=password, PYTHONPATH=str(SERVER_DIR))
-    log = open(LOG_DIR / "server.log", "w")
-    _procs["server"] = subprocess.Popen(
-        [sys.executable, "-m", "invoice_server", "--dist", str(APP_DIR), "--port", str(port)],
-        cwd=SERVER_DIR, env=env, stdout=log, stderr=subprocess.STDOUT,
-    )
-    _wait_http(f"http://127.0.0.1:{port}/healthz", _procs["server"], LOG_DIR / "server.log")
-    info = {"port": port, "password": password, "local": f"http://127.0.0.1:{port}/", "public": None, "colab": None}
+    _launch_server(port, password)
+    info = {"port": port, "password": password, "local": f"http://127.0.0.1:{port}/", "public": None, "colab": None, "tunnel": tunnel}
     info["engine"] = _server_line(LOG_DIR / "server.log")
+    _state.clear()
+    _state.update(info)
     if tunnel:
         info["public"] = _start_tunnel(port)
+        _state["public"] = info["public"]
     info["colab"] = _colab_proxy_url(port)
-    _state.update(info)
+    _state["colab"] = info["colab"]
     if show:
         display_links(info)
+    if watch:
+        _start_watchdog()
     return info
+
+
+def _launch_server(port: int, password: str) -> None:
+    env = dict(os.environ, INVOICE_PASSWORD=password, PYTHONPATH=str(SERVER_DIR))
+    log = open(LOG_DIR / "server.log", "a")
+    # Colab 内のリンク(Colab のプロキシ)からも届くよう、Colab では全てのインターフェースで待ち受ける
+    # (Colab の VM は外から直接は届かない。届いてもパスワードが無ければ使えない)
+    host = "0.0.0.0" if IN_COLAB else "127.0.0.1"
+    _procs["server"] = subprocess.Popen(
+        [sys.executable, "-m", "invoice_server", "--dist", str(APP_DIR), "--host", host, "--port", str(port)],
+        cwd=SERVER_DIR, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+    _wait_http(f"http://127.0.0.1:{port}/healthz", _procs["server"], LOG_DIR / "server.log")
 
 
 def _wait_http(url: str, proc: subprocess.Popen, logfile: Path, timeout: float = 180) -> None:
@@ -164,42 +187,142 @@ def _wait_http(url: str, proc: subprocess.Popen, logfile: Path, timeout: float =
     while time.time() - t0 < timeout:
         if proc.poll() is not None:
             raise RuntimeError("サーバーが起動できませんでした:\n" + logfile.read_text(encoding="utf-8", errors="replace")[-3000:])
-        try:
-            with urllib.request.urlopen(url, timeout=2) as r:
-                if r.status == 200:
-                    return
-        except Exception:
-            time.sleep(0.5)
+        if _http_ok(url):
+            return
+        time.sleep(0.5)
     raise TimeoutError("サーバーの起動がタイムアウトしました")
 
 
+def _http_ok(url: str, timeout: float = 5) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
 def _server_line(logfile: Path) -> str:
-    for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines()[::-1]:
         if line.startswith("[invoice] OCR:"):
             return line.replace("[invoice] ", "")
     return ""
 
 
+#: 発行されたリンクは「単語-単語-…」の形(エラー文中の api.trycloudflare.com は除く)
+_TUNNEL_RE = re.compile(r"https://(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com")
+
+
 def _start_tunnel(port: int) -> str | None:
-    """Cloudflare のクイックトンネル(アカウント不要)で https の公開リンクを作る"""
+    """Cloudflare のクイックトンネル(アカウント不要)で https の公開リンクを作る。
+
+    リンクが発行されても、トンネルの接続が確立するまでは Error 1033 になるので、
+    実際にリンク経由でサーバーへ届くことを確かめてから返す。つながらなければ通信方式を変えて作り直す。
+    """
     exe = WORK / "cloudflared"
     if not exe.exists():
         _download(CLOUDFLARED_URL, exe)
         exe.chmod(0o755)
+    for attempt, protocol in enumerate(("auto", "http2", "http2")):
+        url = _launch_tunnel(exe, port, protocol)
+        if not url:
+            print(f"公開リンクを発行できませんでした(試行 {attempt + 1}/3)。作り直します…", flush=True)
+            continue
+        print(f"公開リンクを発行しました。つながるか確認しています…(最大60秒) {url}", flush=True)
+        t0 = time.time()
+        while time.time() - t0 < 60:
+            if _procs["tunnel"].poll() is not None:
+                break
+            if _http_ok(url + "/healthz", timeout=8):
+                print("公開リンクの接続を確認しました", flush=True)
+                return url
+            time.sleep(2)
+        print(f"公開リンクにつながりませんでした(試行 {attempt + 1}/3、方式 {protocol})。作り直します…", flush=True)
+    print("Cloudflare の公開リンクを作れませんでした。Colab 内のリンクを使ってください。ログ: launcher.logs('cloudflared')", flush=True)
+    return None
+
+
+def _launch_tunnel(exe: Path, port: int, protocol: str) -> str | None:
+    p = _procs.pop("tunnel", None)
+    if p and p.poll() is None:
+        p.terminate()
     logfile = LOG_DIR / "cloudflared.log"
     log = open(logfile, "w")
-    _procs["tunnel"] = subprocess.Popen([str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"], stdout=log, stderr=subprocess.STDOUT)
+    cmd = [str(exe), "tunnel", "--no-autoupdate", "--protocol", protocol, "--url", f"http://127.0.0.1:{port}"]
+    _procs["tunnel"] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     t0 = time.time()
-    while time.time() - t0 < 60:
-        # 発行されたリンクは「単語-単語-…」の形(エラー文中の api.trycloudflare.com は除く)
-        m = re.search(r"https://(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com", logfile.read_text(encoding="utf-8", errors="replace"))
+    while time.time() - t0 < 45:
+        text = logfile.read_text(encoding="utf-8", errors="replace")
+        m = _TUNNEL_RE.search(text)
         if m:
             return m.group(0)
         if _procs["tunnel"].poll() is not None:
-            break
+            return None
         time.sleep(0.5)
-    print("Cloudflare の公開リンクを作れませんでした(Colab 内のリンクは使えます)。ログ:", logfile)
     return None
+
+
+# --------------------------------------------------------------------------- 見張り(自動で起動し直す)
+_watch: dict[str, object] = {}
+
+
+def _note(msg: str) -> None:
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    with open(LOG_DIR / "monitor.log", "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    print(line, flush=True)
+
+
+def _start_watchdog() -> None:
+    import threading
+
+    stop_ev = threading.Event()
+    _watch["stop"] = stop_ev
+
+    def loop() -> None:
+        fails = 0
+        while not stop_ev.wait(10):
+            port = int(_state["port"])
+            server = _procs.get("server")
+            ok = server is not None and server.poll() is None and _http_ok(f"http://127.0.0.1:{port}/healthz")
+            fails = 0 if ok else fails + 1
+            if fails >= 2:
+                _note("サーバーが止まっていたので起動し直します(パスワードは同じです)")
+                try:
+                    p = _procs.pop("server", None)
+                    if p and p.poll() is None:
+                        p.kill()
+                    _launch_server(port, str(_state["password"]))
+                    fails = 0
+                except Exception as e:
+                    _note(f"サーバーを起動し直せませんでした: {e}")
+            tunnel = _procs.get("tunnel")
+            if _state.get("tunnel") and _state.get("public") and (tunnel is None or tunnel.poll() is not None):
+                _note("公開リンクが切れたので作り直します(リンクが変わります)")
+                url = _start_tunnel(port)
+                _state["public"] = url
+                if url:
+                    _note(f"新しい公開リンク: {url}/login")
+
+    t = threading.Thread(target=loop, name="invoice-watchdog", daemon=True)
+    _watch["thread"] = t
+    t.start()
+
+
+def diagnose() -> None:
+    """うまく開けないときの確認(この結果を共有してもらえると原因を特定しやすい。パスワードは表示しません)"""
+    port = int(_state.get("port", 8765))
+    server = _procs.get("server")
+    tunnel = _procs.get("tunnel")
+    print("Colab:", IN_COLAB, "/ GPU:", has_gpu(), "/ UI:", _ui_version().get("version", "?"))
+    print("サーバーのプロセス:", "動作中" if server and server.poll() is None else f"停止(終了コード {server.poll() if server else '-'})")
+    print("サーバーの応答(ローカル):", "OK" if _http_ok(f"http://127.0.0.1:{port}/healthz") else "応答なし")
+    print("トンネルのプロセス:", "動作中" if tunnel and tunnel.poll() is None else ("停止" if tunnel else "なし"))
+    if _state.get("public"):
+        print("公開リンクの応答:", "OK" if _http_ok(str(_state["public"]) + "/healthz", timeout=10) else "応答なし", _state["public"])
+    print("Colab 内のリンク:", _state.get("colab") or "なし")
+    for name in ("monitor", "server", "cloudflared"):
+        print(f"\n----- {name}.log(最後の部分)-----")
+        logs(name, tail=15)
 
 
 def _colab_proxy_url(port: int) -> str | None:
@@ -223,8 +346,9 @@ def display_links(info: dict | None = None) -> None:
         rows.append(f'<div style="font-size:12px;margin-top:4px">ワンクリックでログイン: <a href="{url}/login#pw={pw}" target="_blank">{url}/login#pw=…</a>'
                     '<span style="color:#64748b">(パスワード入りのリンクです。人に送らないでください)</span></div>')
     if info.get("colab"):
-        cu = html.escape(str(info["colab"]))
-        rows.append(f'<div style="margin-top:8px;font-size:12px">Colab 内のリンク(このアカウントのブラウザ専用): <a href="{cu}login#pw={pw}" target="_blank">{cu}</a></div>')
+        cu = html.escape(str(info["colab"]).rstrip("/"))
+        rows.append(f'<a href="{cu}/login#pw={pw}" target="_blank" style="{_BTN};background:#7c3aed;margin-top:8px">アプリを開く(Colab 内のリンク)</a>'
+                    '<div style="margin:4px 0 2px;color:#64748b;font-size:12px">このノートブックを開いている Google アカウントのブラウザでだけ開けます</div>')
     body = "".join(rows) or f'<div>公開リンクはありません。ローカル: {html.escape(info["local"])}</div>'
     out = f"""<div style="font-family:system-ui,sans-serif;border:1px solid #cbd5e1;border-radius:12px;padding:14px 16px;max-width:640px">
 <div style="font-weight:700;margin-bottom:8px">インボイス確認ツール(Colab)を起動しました</div>{body}
@@ -243,6 +367,9 @@ _BTN = "display:inline-block;background:#0d9488;color:#fff;padding:8px 14px;bord
 
 
 def stop(quiet: bool = False) -> None:
+    ev = _watch.pop("stop", None)
+    if ev:
+        ev.set()  # type: ignore[attr-defined]
     for name in ("tunnel", "server"):
         p = _procs.pop(name, None)
         if p and p.poll() is None:
