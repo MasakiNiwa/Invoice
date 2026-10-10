@@ -20,12 +20,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from .ocr import PaddleOcr, Params
 
 COOKIE = "invoice_session"
+#: このアプリの画面だけが付けるヘッダー(他のサイトからの POST を防ぐ)
+CLIENT_HEADER = "x-invoice-client"
 SESSION_TTL = 12 * 3600
 #: ログイン失敗の上限(IP ごと、10分あたり)
 MAX_FAILS = 10
@@ -54,8 +56,10 @@ button{margin-top:14px;width:100%;padding:10px;border:0;border-radius:10px;backg
 <button type="submit">ログイン</button><div class="err" id="err"></div></form>
 <script>
 const f=document.getElementById('f'),pw=document.getElementById('pw'),err=document.getElementById('err');
-async function login(p){const r=await fetch('api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:p})});
- if(r.ok){location.replace('./');return}const j=await r.json().catch(()=>({}));err.textContent=j.detail||'ログインできませんでした'}
+async function login(p){err.textContent='';const r=await fetch('api/login',{method:'POST',headers:{'content-type':'application/json','x-invoice-client':'1'},body:JSON.stringify({password:p})});
+ const j=await r.json().catch(()=>({}));
+ if(r.ok){try{localStorage.setItem('invoice-colab-token',j.token)}catch(e){}location.replace('./');return}
+ err.textContent=j.detail||('ログインできませんでした('+r.status+')')}
 f.onsubmit=e=>{e.preventDefault();login(pw.value)};
 // ノートブックの「ワンクリックでログイン」リンク(#pw=...)。パスワードはサーバーへ送る前に URL から消す
 // (埋め込み方によっては # が %23 としてパスに入るので、パスの方も見る)
@@ -114,31 +118,29 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
             or req.headers.get("origin", "").startswith("https://")
         )
 
-    def same_site_origin(req: Request, origin: str) -> bool:
-        o = origin.split("://", 1)[-1]
-        hosts = {req.headers.get("host", ""), req.headers.get("x-forwarded-host", "")}
-        if o in hosts:
-            return True
-        # Colab のプロキシは Host を書き換えることがある。そのときは Colab のプロキシのホスト名からの POST だけ許す
-        return req.headers.get("host", "").split(":")[0] in LOCAL_HOSTS and o.split(":")[0].endswith((".colab.dev", ".googleusercontent.com"))
+    def token_of(req: Request) -> str | None:
+        # ブラウザが保存したトークン(Authorization ヘッダー)か Cookie。プロキシが Cookie を扱わない場合もあるので両方
+        h = req.headers.get("authorization", "")
+        return h[7:] if h.startswith("Bearer ") else req.cookies.get(COOKIE)
 
     @app.middleware("http")
     async def auth(req: Request, call_next):
         path = req.url.path
-        # 他のサイトから(Cookie を使って)送られてくる POST は受け付けない
-        if req.method == "POST":
-            origin = req.headers.get("origin")
-            if origin and origin != "null" and not same_site_origin(req, origin):
-                return JSONResponse({"detail": "別のサイトからのリクエストは受け付けません"}, status_code=403)
-        if path in ("/login", "/api/login", "/healthz") or path.startswith("/login#"):
+        # 画面のファイル(HTML・JS・モデル)は GitHub Pages で公開しているものと同じなので、そのまま配信する。
+        # 守るのは API(文字認識など)
+        if not path.startswith("/api/"):
             return await call_next(req)
-        if valid(req.cookies.get(COOKIE)):
+        # 他のサイトからのリクエストの防止: POST にはこのアプリだけが付けるヘッダーを必須にする
+        # (別のサイトの画面からこのヘッダーを付けて送るには事前の確認(CORS)が必要で、それには応じないため送れない)
+        if req.method == "POST" and req.headers.get(CLIENT_HEADER) != "1":
+            return JSONResponse({"detail": "このアプリ以外からのリクエストは受け付けません"}, status_code=403)
+        if path == "/api/login":
+            return await call_next(req)
+        if valid(token_of(req)):
             res = await call_next(req)
-            res.headers.setdefault("Cache-Control", "no-store" if path.startswith("/api/") else "no-cache")
+            res.headers.setdefault("Cache-Control", "no-store")
             return res
-        if path.startswith("/api/"):
-            return JSONResponse({"app": "invoice-colab", "detail": "ログインが必要です", "login": "login"}, status_code=401)
-        return RedirectResponse("/login", status_code=303)
+        return JSONResponse({"app": "invoice-colab", "detail": "ログインが必要です", "login": "login"}, status_code=401)
 
     # 埋め込みは Colab のノートブックの中だけ許す(他のサイトに埋め込まれて操作されるのを防ぐ)
     @app.middleware("http")
@@ -188,7 +190,7 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         fails.pop(ip, None)
         sid = secrets.token_urlsafe(24)
         sessions[sid] = now + SESSION_TTL
-        res = JSONResponse({"ok": True})
+        res = JSONResponse({"ok": True, "token": sign(sid)})
         if is_https(req):
             # ノートブックの中(Colab の出力枠 = 別サイトの iframe)でも使えるよう SameSite=None。
             # Partitioned で、その埋め込み先でだけ有効な Cookie にする
@@ -199,7 +201,7 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
 
     @app.post("/api/logout")
     def logout(req: Request):
-        token = req.cookies.get(COOKIE)
+        token = token_of(req)
         if token and "." in token:
             sessions.pop(token.rsplit(".", 1)[0], None)
         res = JSONResponse({"ok": True})
