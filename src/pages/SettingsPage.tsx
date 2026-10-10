@@ -3,6 +3,7 @@ import { RotateCcw } from 'lucide-react'
 import { useSettings, type Engine, type PaddleBackendPref, type ScanStrength, type Theme } from '../store/settings'
 import { webGpuAvailable } from '../lib/ocr/paddle'
 import { useServer } from '../store/server'
+import { serverLogout } from '../lib/ocr/server'
 
 function Row({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return (
@@ -68,10 +69,7 @@ export default function SettingsPage() {
             <button
               type="button"
               className="btn-ghost px-3 py-1.5 text-sm"
-              onClick={async () => {
-                await fetch(new URL('./api/logout', document.baseURI), { method: 'POST' }).catch(() => {})
-                location.href = new URL('./login', document.baseURI).href
-              }}
+              onClick={() => void serverLogout()}
             >
               ログアウト
             </button>

@@ -20,6 +20,30 @@ export interface ServerInfo {
 
 const api = (path: string) => new URL(`./api/${path}`, document.baseURI).href
 
+const TOKEN_KEY = 'invoice-colab-token'
+/** API に付けるヘッダー: ログインで受け取ったトークンと、このアプリからのリクエストである印 */
+export function serverHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { 'x-invoice-client': '1', ...extra }
+  try {
+    const t = localStorage.getItem(TOKEN_KEY)
+    if (t) h.authorization = `Bearer ${t}`
+  } catch {
+    /* 保存領域が使えないときは Cookie だけで認証 */
+  }
+  return h
+}
+
+/** ログアウト(サーバーのセッションと保存したトークンを消してログイン画面へ) */
+export async function serverLogout() {
+  await fetch(api('logout'), { method: 'POST', headers: serverHeaders(), credentials: 'same-origin' }).catch(() => {})
+  try {
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* 無視 */
+  }
+  toLogin()
+}
+
 /** ログインの期限が切れたらログイン画面へ */
 function toLogin() {
   location.href = new URL('./login', document.baseURI).href
@@ -29,7 +53,7 @@ function toLogin() {
 export async function detectServer(): Promise<ServerInfo | null> {
   if (/\.github\.io$/.test(location.hostname)) return null
   try {
-    const res = await fetch(api('status'), { cache: 'no-store', credentials: 'same-origin' })
+    const res = await fetch(api('status'), { cache: 'no-store', credentials: 'same-origin', headers: serverHeaders() })
     const json = await res.json().catch(() => null)
     if (res.status === 401 && json?.app === 'invoice-colab') {
       toLogin()
@@ -97,7 +121,7 @@ export class ServerEngine implements OcrBackend {
     if (params.recStretch) q.set('recStretch', String(params.recStretch))
     let res: Response
     try {
-      res = await fetch(api(`ocr?${q}`), { method: 'POST', body, headers: { 'content-type': body.type }, credentials: 'same-origin', signal })
+      res = await fetch(api(`ocr?${q}`), { method: 'POST', body, headers: serverHeaders({ 'content-type': body.type }), credentials: 'same-origin', signal })
     } catch (e) {
       if (signal?.aborted) throw new AbortError()
       this.setStatus({ state: 'error', error: 'Colab のサーバーに接続できません(ノートブックが停止していないか確認してください)' })
