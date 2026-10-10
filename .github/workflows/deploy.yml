@@ -1,17 +1,9 @@
 name: Deploy to GitHub Pages
 
-# 公開サイトの構成
-#   https://masakiniwa.github.io/Invoice/      … main ブランチ(本番)
-#   https://masakiniwa.github.io/Invoice/dev/  … dev ブランチ(開発版のプレビュー。dev ブランチがあるときだけ)
-# dev への push では CI が通ったあとに(workflow_run で main の文脈から)公開し直す。
-# GitHub Pages の環境は既定で main からしか公開できないため。
+# 公開するのは main ブランチ(本番)だけ。開発中の版は Colab 版でブランチを指定してビルドして確認する
 on:
   push:
     branches: [main]
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [dev]
   workflow_dispatch:
 
 permissions:
@@ -25,12 +17,9 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -43,28 +32,6 @@ jobs:
         run: |
           cd dist && zip -q -r ../app.zip . && cd ..
           mkdir -p dist/colab && mv app.zip dist/colab/app.zip
-
-      # ---- 開発版(dev ブランチ)----
-      - name: Check dev branch
-        id: dev
-        run: |
-          if git ls-remote --exit-code --heads origin dev > /dev/null; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/checkout@v4
-        if: steps.dev.outputs.exists == 'true'
-        with:
-          ref: dev
-          path: dev-src
-      - name: Build dev
-        if: steps.dev.outputs.exists == 'true'
-        working-directory: dev-src
-        run: |
-          npm ci
-          npm test
-          npm run build
-          cd dist && zip -q -r ../app.zip . && cd ..
-          mkdir -p dist/colab && mv app.zip dist/colab/app.zip
-          cp -r dist ../dist/dev
-      - run: ls -la dist dist/colab && (ls -la dist/dev/colab || true)
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
