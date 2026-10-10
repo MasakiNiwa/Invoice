@@ -1,6 +1,5 @@
 name: Deploy to GitHub Pages
 
-# 公開するのは main ブランチ(本番)だけ。開発中の版は Colab 版でブランチを指定してビルドして確認する
 on:
   push:
     branches: [main]

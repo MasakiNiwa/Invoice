@@ -5,7 +5,7 @@
 
 **▶ 公開ページ: https://masakiniwa.github.io/Invoice/**
 
-**▶ Colab 版(GPU で高速に動かす): [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/MasakiNiwa/Invoice/blob/main/colab/Invoice_Colab.ipynb)** — 同じ画面を Google Colab の GPU で動かします([説明](colab/README.md))
+**▶ Colab 版(試験的): [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/MasakiNiwa/Invoice/blob/main/colab/Invoice_Colab.ipynb)** — 同じ画面を Google Colab で動かす開発中の版です([説明](colab/README.md))
 
 ## 特長
 
@@ -23,14 +23,8 @@
 - 🧮 **金額の集計・精算チェック**: 明細の合計と記載の合計の照合(ETC 利用明細など)、領収書の束の合計・登録番号なしの検出・精算金額との照合
 - 📱 **PWA**: ホーム画面に追加してオフラインでも利用可
 - 🔒 **プライバシー**: 画像はブラウザ内で処理され、外部に送信されません(Colab 版では、画像を自分で起動した Colab のサーバーに送って処理します)
-- ☁️ **Colab 版**: 同じ UI を Colab の GPU で。ブラウザにモデルを読み込まず、起動ごとのパスワードでログイン
+- ☁️ **Colab 版(試験的)**: 同じ UI を Colab で。起動ごとのパスワードでログイン
 - 📱 スマホ・PC対応、ダークモード対応
-
-## 開発の流れ(dev ブランチでの確認)
-
-- `main` … 本番。GitHub Pages(https://masakiniwa.github.io/Invoice/)に公開されます
-- `dev` … 開発中の版。公開はせず、Colab 版で `BRANCH = "dev"`、`SOURCE = "build"` にしてビルドし、自分だけが見られる形で動作を確かめます
-- 納得できたら `dev` から `main` へマージして公開します
 
 ## 開発
 
