@@ -33,6 +33,8 @@ MAX_FAILS = 10
 MAX_UPLOAD = 40 * 1024 * 1024
 MAX_PIXELS = 60_000_000
 
+FRAME_ANCESTORS = "frame-ancestors 'self' https://colab.research.google.com https://*.googleusercontent.com https://*.colab.dev https://*.colab.googleusercontent.com"
+
 LOGIN_HTML = """<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ログイン - インボイス確認ツール(Colab)</title>
@@ -56,7 +58,8 @@ async function login(p){const r=await fetch('api/login',{method:'POST',headers:{
  if(r.ok){location.replace('./');return}const j=await r.json().catch(()=>({}));err.textContent=j.detail||'ログインできませんでした'}
 f.onsubmit=e=>{e.preventDefault();login(pw.value)};
 // ノートブックの「ワンクリックでログイン」リンク(#pw=...)。パスワードはサーバーへ送る前に URL から消す
-const m=location.hash.match(/pw=([^&]+)/);if(m){history.replaceState(null,'',location.pathname);login(decodeURIComponent(m[1]))}
+// (埋め込み方によっては # が %23 としてパスに入るので、パスの方も見る)
+const m=(location.hash+' '+decodeURIComponent(location.pathname)).match(/pw=([^&#\s/]+)/);if(m){history.replaceState(null,'','login');login(decodeURIComponent(m[1]))}
 </script></body></html>"""
 
 
@@ -97,10 +100,35 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         # Cloudflare のトンネル経由なら接続元は CF-Connecting-IP に入る
         return req.headers.get("cf-connecting-ip") or (req.client.host if req.client else "?")
 
+    LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]", "testserver")
+
+    def is_https(req: Request) -> bool:
+        # Cloudflare・Colab のプロキシは https で中継する。転送ヘッダーが無かったり Host が localhost に
+        # 書き換えられたりすることもあるので、ブラウザが付ける Origin も見る
+        host = req.headers.get("host", "").split(":")[0]
+        return (
+            req.headers.get("x-forwarded-proto", req.url.scheme) == "https"
+            or host not in LOCAL_HOSTS
+            or req.headers.get("origin", "").startswith("https://")
+        )
+
+    def same_site_origin(req: Request, origin: str) -> bool:
+        o = origin.split("://", 1)[-1]
+        hosts = {req.headers.get("host", ""), req.headers.get("x-forwarded-host", "")}
+        if o in hosts:
+            return True
+        # Colab のプロキシは Host を書き換えることがある。そのときは Colab のプロキシのホスト名からの POST だけ許す
+        return req.headers.get("host", "").split(":")[0] in LOCAL_HOSTS and o.split(":")[0].endswith((".colab.dev", ".googleusercontent.com"))
+
     @app.middleware("http")
     async def auth(req: Request, call_next):
         path = req.url.path
-        if path in ("/login", "/api/login", "/healthz"):
+        # 他のサイトから(Cookie を使って)送られてくる POST は受け付けない
+        if req.method == "POST":
+            origin = req.headers.get("origin")
+            if origin and origin != "null" and not same_site_origin(req, origin):
+                return JSONResponse({"detail": "別のサイトからのリクエストは受け付けません"}, status_code=403)
+        if path in ("/login", "/api/login", "/healthz") or path.startswith("/login#"):
             return await call_next(req)
         if valid(req.cookies.get(COOKIE)):
             res = await call_next(req)
@@ -109,6 +137,13 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         if path.startswith("/api/"):
             return JSONResponse({"app": "invoice-colab", "detail": "ログインが必要です", "login": "login"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
+
+    # 埋め込みは Colab のノートブックの中だけ許す(他のサイトに埋め込まれて操作されるのを防ぐ)
+    @app.middleware("http")
+    async def frame_policy(req: Request, call_next):
+        res = await call_next(req)
+        res.headers["Content-Security-Policy"] = FRAME_ANCESTORS
+        return res
 
     # 受け付けたリクエストの記録(つながらないときの調査用。見張りの /healthz と画面の部品は除く)
     @app.middleware("http")
@@ -129,8 +164,9 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         return {"ok": True}
 
     @app.get("/login")
-    def login_page():
-        return HTMLResponse(LOGIN_HTML, headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
+    @app.get("/login{rest:path}")
+    def login_page(rest: str = ""):
+        return HTMLResponse(LOGIN_HTML, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/login")
     async def login(req: Request):
@@ -151,8 +187,12 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         sid = secrets.token_urlsafe(24)
         sessions[sid] = now + SESSION_TTL
         res = JSONResponse({"ok": True})
-        secure = req.headers.get("x-forwarded-proto", req.url.scheme) == "https"
-        res.set_cookie(COOKIE, sign(sid), max_age=SESSION_TTL, httponly=True, samesite="lax", secure=secure)
+        if is_https(req):
+            # ノートブックの中(Colab の出力枠 = 別サイトの iframe)でも使えるよう SameSite=None。
+            # Partitioned で、その埋め込み先でだけ有効な Cookie にする
+            res.headers.append("set-cookie", f"{COOKIE}={sign(sid)}; Max-Age={SESSION_TTL}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned")
+        else:
+            res.set_cookie(COOKIE, sign(sid), max_age=SESSION_TTL, httponly=True, samesite="lax")
         return res
 
     @app.post("/api/logout")

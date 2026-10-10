@@ -8,7 +8,6 @@
 
 source:
   "pages"     … GitHub Pages で公開中のビルド済み UI(colab/app.zip)をダウンロードして使う(速い)
-  "pages-dev" … GitHub Pages の開発版(dev ブランチ、/dev/colab/app.zip)を使う
   "build"     … このリポジトリ(ブランチ)のソースから UI をビルドする(push 前の版を試すとき)
 """
 from __future__ import annotations
@@ -33,8 +32,6 @@ WORK = Path(os.environ.get("INVOICE_WORK", "/content" if Path("/content").exists
 APP_DIR = WORK / "invoice-app"
 LOG_DIR = WORK / "logs"
 PAGES_ZIP = "https://masakiniwa.github.io/Invoice/colab/app.zip"
-#: dev ブランチの開発版(GitHub Pages の /dev/)
-PAGES_DEV_ZIP = "https://masakiniwa.github.io/Invoice/dev/colab/app.zip"
 NODE_VERSION = "v22.12.0"
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 
@@ -70,12 +67,10 @@ def setup(source: str = "pages", install: bool = True) -> Path:
         _install_python(has_gpu())
     if source == "pages":
         _ui_from_pages(PAGES_ZIP)
-    elif source == "pages-dev":
-        _ui_from_pages(PAGES_DEV_ZIP)
     elif source == "build":
         _ui_from_source()
     else:
-        raise ValueError('source は "pages" / "pages-dev" / "build" のどれかを指定してください')
+        raise ValueError('source は "pages" か "build" を指定してください')
     v = _ui_version()
     print(f"UI の準備ができました: {APP_DIR}(v{v.get('version', '?')} {v.get('commit', '')})", flush=True)
     return APP_DIR
@@ -153,15 +148,13 @@ def start(port: int = 8765, tunnel: bool = True, password: str | None = None, sh
     password = password or secrets.token_urlsafe(9)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     _launch_server(port, password)
-    info = {"port": port, "password": password, "local": f"http://127.0.0.1:{port}/", "public": None, "colab": None, "tunnel": tunnel}
+    info = {"port": port, "password": password, "local": f"http://127.0.0.1:{port}/", "public": None, "tunnel": tunnel}
     info["engine"] = _server_line(LOG_DIR / "server.log")
     _state.clear()
     _state.update(info)
     if tunnel:
         info["public"] = _start_tunnel(port)
         _state["public"] = info["public"]
-    info["colab"] = _colab_proxy_url(port)
-    _state["colab"] = info["colab"]
     if show:
         display_links(info)
     if watch:
@@ -321,58 +314,50 @@ def diagnose() -> None:
     print("トンネルのプロセス:", "動作中" if tunnel and tunnel.poll() is None else ("停止" if tunnel else "なし"))
     if _state.get("public"):
         print("公開リンクの応答:", "OK" if _http_ok(str(_state["public"]) + "/healthz", timeout=10) else "応答なし", _state["public"])
-    print("Colab 内のリンク:", _state.get("colab") or "なし")
     for name in ("monitor", "server", "cloudflared"):
         print(f"\n----- {name}.log(最後の部分)-----")
         logs(name, tail=25)
 
 
-def _colab_proxy_url(port: int) -> str | None:
-    """Colab のプロキシ経由のリンク(このノートブックを開いている Google アカウントのブラウザでのみ開ける)"""
-    try:
-        from google.colab.output import eval_js  # type: ignore
-
-        return eval_js(f"google.colab.kernel.proxyPort({port})")
-    except Exception:
-        return None
-
-
-def display_links(info: dict | None = None) -> None:
+def display_links(info: dict | None = None, height: int = 900) -> None:
+    """起動結果を表示する。公開リンクがあればリンクとパスワード、無ければノートブックの中にアプリを表示する"""
     info = info or dict(_state)
     pw = html.escape(str(info["password"]))
-    rows = []
+    engine = html.escape(info.get("engine") or "")
     if info.get("public"):
         url = html.escape(str(info["public"]))
-        rows.append(f'<a href="{url}/login" target="_blank" style="{_BTN}">アプリを開く(公開リンク)</a>'
-                    f'<div style="margin:6px 0 2px;color:#64748b;font-size:12px">{url}</div>')
-        rows.append(f'<div style="font-size:12px;margin-top:4px">ワンクリックでログイン: <a href="{url}/login#pw={pw}" target="_blank">{url}/login#pw=…</a>'
-                    '<span style="color:#64748b">(パスワード入りのリンクです。人に送らないでください)</span></div>')
-    if info.get("colab"):
-        cu = html.escape(str(info["colab"]).rstrip("/"))
-        rows.append(f'<a href="{cu}/login#pw={pw}" target="_blank" style="{_BTN};background:#7c3aed;margin-top:8px">アプリを開く(Colab 内のリンク)</a>'
-                    '<div style="margin:4px 0 2px;color:#64748b;font-size:12px">このノートブックを開いている Google アカウントのブラウザでだけ開けます</div>')
-    if info.get("colab"):
-        rows.append('<div style="margin-top:6px;font-size:12px;color:#64748b">開けないときは、このセルの下に出る Colab のリンク(「アプリを開く(Colab)」)もお試しください</div>')
-    body = "".join(rows) or f'<div>公開リンクはありません。ローカル: {html.escape(info["local"])}</div>'
+        body = (f'<a href="{url}/login" target="_blank" style="{_BTN}">アプリを開く(公開リンク)</a>'
+                f'<div style="margin:6px 0 2px;color:#64748b;font-size:12px">{url}</div>'
+                f'<div style="font-size:12px;margin-top:4px">ワンクリックでログイン: <a href="{url}/login#pw={pw}" target="_blank">{url}/login#pw=…</a>'
+                '<span style="color:#64748b">(パスワード入りのリンクです。人に送らないでください)</span></div>'
+                f'<div style="margin-top:10px">パスワード: <code style="font-size:15px;background:#f1f5f9;color:#0f172a;padding:2px 8px;border-radius:6px">{pw}</code>'
+                f'<button onclick="navigator.clipboard.writeText(\'{pw}\');this.textContent=\'コピーしました\'" style="margin-left:6px">コピー</button></div>')
+    else:
+        body = '<div>下にアプリを表示します(このノートブックを開いている人だけが見られます)。</div>'
     out = f"""<div style="font-family:system-ui,sans-serif;border:1px solid #cbd5e1;border-radius:12px;padding:14px 16px;max-width:640px">
 <div style="font-weight:700;margin-bottom:8px">インボイス確認ツール(Colab)を起動しました</div>{body}
-<div style="margin-top:10px">パスワード: <code style="font-size:15px;background:#f1f5f9;color:#0f172a;padding:2px 8px;border-radius:6px">{pw}</code>
-<button onclick="navigator.clipboard.writeText('{pw}');this.textContent='コピーしました'" style="margin-left:6px">コピー</button></div>
-<div style="margin-top:6px;color:#64748b;font-size:12px">{html.escape(info.get('engine') or '')}。このセルの実行を止めるかランタイムを切断すると、リンクは使えなくなります。</div></div>"""
+<div style="margin-top:6px;color:#64748b;font-size:12px">{engine}。このノートブックを止めるかランタイムが切断されると使えなくなります。</div></div>"""
     try:
         from IPython.display import HTML, display  # type: ignore
 
         display(HTML(out))
-        if info.get("colab"):
-            # Colab 公式の開き方(Colab の画面から認証付きで新しいタブを開く)
-            try:
-                from google.colab import output  # type: ignore
-
-                output.serve_kernel_port_as_window(int(info["port"]), path="/login", anchor_text="アプリを開く(Colab)")
-            except Exception:
-                pass
     except Exception:
-        print(json.dumps(info, ensure_ascii=False, indent=2))
+        print(json.dumps({k: v for k, v in info.items() if k != "password"}, ensure_ascii=False, indent=2))
+        return
+    if not info.get("public"):
+        show_in_notebook(height)
+
+
+def show_in_notebook(height: int = 900) -> None:
+    """ノートブックの中(出力欄)にアプリを表示する。Colab のプロキシを通るので、このノートブックを開いている人だけが見られる。
+    新しいタブで開く方式は、ブラウザのセキュリティ強化で動かないことがあるため使わない"""
+    try:
+        from google.colab import output  # type: ignore
+    except Exception:
+        print("Colab の外では使えません。ローカル:", _state.get("local"))
+        return
+    # 出力欄の中では自動でログインする(パスワードは出力欄の中だけで使い、URL の # 以降なのでサーバーには送られない)
+    output.serve_kernel_port_as_iframe(int(_state["port"]), path=f"/login#pw={_state['password']}", height=height)
 
 
 _BTN = "display:inline-block;background:#0d9488;color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600"

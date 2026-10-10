@@ -68,3 +68,27 @@ def test_login_status_ocr_and_static(client):
     assert client.get("/../../etc/passwd").status_code in (200, 404)
     assert "root:" not in client.get("/../../etc/passwd").text
     assert client.post("/api/ocr", content=b"not an image").status_code == 400
+
+
+def test_cookie_for_colab_iframe_and_origin_check():
+    app = create_app(DIST, password="pw", device="cpu")
+    c = TestClient(app, base_url="https://8765-abc.prod.colab.dev")
+    r = c.post("/api/login", json={"password": "pw"})
+    sc = r.headers["set-cookie"]
+    assert "SameSite=None" in sc and "Secure" in sc and "Partitioned" in sc and "HttpOnly" in sc
+    assert "frame-ancestors" in c.get("/login").headers["content-security-policy"]
+    # 別サイトからの POST は拒否
+    bad = c.post("/api/logout", headers={"origin": "https://evil.example"})
+    assert bad.status_code == 403
+    ok = c.post("/api/logout", headers={"origin": "https://8765-abc.prod.colab.dev"})
+    assert ok.status_code == 200
+
+
+def test_colab_proxy_rewriting_host():
+    """Colab のプロキシが Host を localhost に書き換えても、Colab のホスト名からのログインは通り、Cookie は iframe 用になる"""
+    app = create_app(DIST, password="pw", device="cpu")
+    c = TestClient(app, base_url="http://localhost:8765")
+    r = c.post("/api/login", json={"password": "pw"}, headers={"origin": "https://8765-gpu-t4-abc.us-west4-1.prod.colab.dev"})
+    assert r.status_code == 200 and "SameSite=None" in r.headers["set-cookie"]
+    assert c.post("/api/login", json={"password": "pw"}, headers={"origin": "https://evil.example"}).status_code == 403
+    assert c.get("/login%23pw=abc").status_code == 200

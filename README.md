@@ -28,11 +28,9 @@
 
 ## 開発の流れ(dev ブランチでの確認)
 
-- `main` … 本番。https://masakiniwa.github.io/Invoice/
-- `dev` … 開発版。push すると CI のあと https://masakiniwa.github.io/Invoice/dev/ に公開されます(画面に「開発版」と表示)
-- 開発は `dev` で進め、開発版で動作を確かめてから `main` へマージします
-- Colab 版でも `BRANCH = "dev"`、`SOURCE = "pages-dev"`(または `build`)で開発版を試せます
-- 本番と開発版は同じサイト(オリジン)なので、設定と履歴は共有されます
+- `main` … 本番。GitHub Pages(https://masakiniwa.github.io/Invoice/)に公開されます
+- `dev` … 開発中の版。公開はせず、Colab 版で `BRANCH = "dev"`、`SOURCE = "build"` にしてビルドし、自分だけが見られる形で動作を確かめます
+- 納得できたら `dev` から `main` へマージして公開します
 
 ## 開発
 
