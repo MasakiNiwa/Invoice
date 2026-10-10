@@ -59,13 +59,15 @@ async function login(p){const r=await fetch('api/login',{method:'POST',headers:{
 f.onsubmit=e=>{e.preventDefault();login(pw.value)};
 // ノートブックの「ワンクリックでログイン」リンク(#pw=...)。パスワードはサーバーへ送る前に URL から消す
 // (埋め込み方によっては # が %23 としてパスに入るので、パスの方も見る)
-const m=(location.hash+' '+decodeURIComponent(location.pathname)).match(/pw=([^&#\s/]+)/);if(m){history.replaceState(null,'','login');login(decodeURIComponent(m[1]))}
+const m=(location.hash+' '+decodeURIComponent(location.pathname)).match(/pw=([^&#\\s/]+)/);if(m){history.replaceState(null,'','login');login(decodeURIComponent(m[1]))}
 </script></body></html>"""
 
 
-def create_app(dist: str | Path, models: str | Path | None = None, password: str | None = None, device: str = "auto", version: str = "", debug_dir: str | Path | None = None) -> FastAPI:
+def create_app(dist: str | Path, models: str | Path | None = None, password: str | None = None, device: str = "auto", version: str = "", debug_dir: str | Path | None = None, log=None) -> FastAPI:
     dist = Path(dist).resolve()
     models = Path(models).resolve() if models else dist / "paddle"
+    # 記録の書き出し先(既定は標準出力。ノートブックの中で動かすときはファイルへ)
+    log = log or (lambda msg: print(msg, flush=True))
     if not (dist / "index.html").exists():
         raise FileNotFoundError(f"UI が見つかりません: {dist}/index.html")
     password = password or secrets.token_urlsafe(9)
@@ -153,10 +155,10 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
         try:
             res = await call_next(req)
         except Exception as e:
-            print(f"[invoice] {req.method} {path} -> 例外 {type(e).__name__}: {e}", flush=True)
+            log(f"[invoice] {req.method} {path} -> 例外 {type(e).__name__}: {e}")
             raise
         if path != "/healthz" and not path.startswith("/assets/"):
-            print(f"[invoice] {req.method} {path} {res.status_code} {(time.perf_counter() - t0) * 1000:.0f}ms via {req.headers.get('host', '?')}", flush=True)
+            log(f"[invoice] {req.method} {path} {res.status_code} {(time.perf_counter() - t0) * 1000:.0f}ms via {req.headers.get('host', '?')} from {req.client.host if req.client else '?'}")
         return res
 
     @app.get("/healthz")
