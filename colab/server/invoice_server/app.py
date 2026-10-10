@@ -110,6 +110,20 @@ def create_app(dist: str | Path, models: str | Path | None = None, password: str
             return JSONResponse({"app": "invoice-colab", "detail": "ログインが必要です", "login": "login"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
 
+    # 受け付けたリクエストの記録(つながらないときの調査用。見張りの /healthz と画面の部品は除く)
+    @app.middleware("http")
+    async def access_log(req: Request, call_next):
+        t0 = time.perf_counter()
+        path = req.url.path
+        try:
+            res = await call_next(req)
+        except Exception as e:
+            print(f"[invoice] {req.method} {path} -> 例外 {type(e).__name__}: {e}", flush=True)
+            raise
+        if path != "/healthz" and not path.startswith("/assets/"):
+            print(f"[invoice] {req.method} {path} {res.status_code} {(time.perf_counter() - t0) * 1000:.0f}ms via {req.headers.get('host', '?')}", flush=True)
+        return res
+
     @app.get("/healthz")
     def healthz():
         return {"ok": True}

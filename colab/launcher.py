@@ -172,9 +172,10 @@ def start(port: int = 8765, tunnel: bool = True, password: str | None = None, sh
 def _launch_server(port: int, password: str) -> None:
     env = dict(os.environ, INVOICE_PASSWORD=password, PYTHONPATH=str(SERVER_DIR))
     log = open(LOG_DIR / "server.log", "a")
-    # Colab 内のリンク(Colab のプロキシ)からも届くよう、Colab では全てのインターフェースで待ち受ける
-    # (Colab の VM は外から直接は届かない。届いてもパスワードが無ければ使えない)
-    host = "0.0.0.0" if IN_COLAB else "127.0.0.1"
+    # Colab 内のリンク(Colab のプロキシ)からも届くよう、Colab では IPv4 と IPv6 の両方で待ち受ける
+    # (プロキシは localhost に接続し、localhost が IPv6 の ::1 になることがある。
+    #  Colab の VM は外から直接は届かない。届いてもパスワードが無ければ使えない)
+    host = "dual" if IN_COLAB else "127.0.0.1"
     _procs["server"] = subprocess.Popen(
         [sys.executable, "-m", "invoice_server", "--dist", str(APP_DIR), "--host", host, "--port", str(port)],
         cwd=SERVER_DIR, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
@@ -315,14 +316,15 @@ def diagnose() -> None:
     tunnel = _procs.get("tunnel")
     print("Colab:", IN_COLAB, "/ GPU:", has_gpu(), "/ UI:", _ui_version().get("version", "?"))
     print("サーバーのプロセス:", "動作中" if server and server.poll() is None else f"停止(終了コード {server.poll() if server else '-'})")
-    print("サーバーの応答(ローカル):", "OK" if _http_ok(f"http://127.0.0.1:{port}/healthz") else "応答なし")
+    for h in ("127.0.0.1", "localhost", "[::1]"):
+        print(f"サーバーの応答({h}):", "OK" if _http_ok(f"http://{h}:{port}/healthz", timeout=3) else "応答なし")
     print("トンネルのプロセス:", "動作中" if tunnel and tunnel.poll() is None else ("停止" if tunnel else "なし"))
     if _state.get("public"):
         print("公開リンクの応答:", "OK" if _http_ok(str(_state["public"]) + "/healthz", timeout=10) else "応答なし", _state["public"])
     print("Colab 内のリンク:", _state.get("colab") or "なし")
     for name in ("monitor", "server", "cloudflared"):
         print(f"\n----- {name}.log(最後の部分)-----")
-        logs(name, tail=15)
+        logs(name, tail=25)
 
 
 def _colab_proxy_url(port: int) -> str | None:
@@ -349,6 +351,8 @@ def display_links(info: dict | None = None) -> None:
         cu = html.escape(str(info["colab"]).rstrip("/"))
         rows.append(f'<a href="{cu}/login#pw={pw}" target="_blank" style="{_BTN};background:#7c3aed;margin-top:8px">アプリを開く(Colab 内のリンク)</a>'
                     '<div style="margin:4px 0 2px;color:#64748b;font-size:12px">このノートブックを開いている Google アカウントのブラウザでだけ開けます</div>')
+    if info.get("colab"):
+        rows.append('<div style="margin-top:6px;font-size:12px;color:#64748b">開けないときは、このセルの下に出る Colab のリンク(「アプリを開く(Colab)」)もお試しください</div>')
     body = "".join(rows) or f'<div>公開リンクはありません。ローカル: {html.escape(info["local"])}</div>'
     out = f"""<div style="font-family:system-ui,sans-serif;border:1px solid #cbd5e1;border-radius:12px;padding:14px 16px;max-width:640px">
 <div style="font-weight:700;margin-bottom:8px">インボイス確認ツール(Colab)を起動しました</div>{body}
@@ -359,6 +363,14 @@ def display_links(info: dict | None = None) -> None:
         from IPython.display import HTML, display  # type: ignore
 
         display(HTML(out))
+        if info.get("colab"):
+            # Colab 公式の開き方(Colab の画面から認証付きで新しいタブを開く)
+            try:
+                from google.colab import output  # type: ignore
+
+                output.serve_kernel_port_as_window(int(info["port"]), path="/login", anchor_text="アプリを開く(Colab)")
+            except Exception:
+                pass
     except Exception:
         print(json.dumps(info, ensure_ascii=False, indent=2))
 
