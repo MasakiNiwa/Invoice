@@ -137,7 +137,7 @@ def _ui_version() -> dict:
 IN_COLAB = "COLAB_RELEASE_TAG" in os.environ or Path("/content").is_dir() and Path("/opt/google").is_dir()
 
 
-def start(port: int = 8765, tunnel: bool = True, password: str | None = None, show: bool = True, watch: bool = True) -> dict:
+def start(port: int = 8000, tunnel: bool = True, password: str | None = None, show: bool = True, watch: bool = True) -> dict:
     """サーバーと公開リンクを起動し、つながることを確かめてからリンクとパスワードを表示する。
 
     watch=True のとき、裏で数秒ごとに見張り、サーバーやトンネルが止まったら自動で起動し直す。
@@ -163,17 +163,83 @@ def start(port: int = 8765, tunnel: bool = True, password: str | None = None, sh
 
 
 def _launch_server(port: int, password: str) -> None:
+    if IN_COLAB:
+        _launch_inprocess(port, password)
+        return
     env = dict(os.environ, INVOICE_PASSWORD=password, PYTHONPATH=str(SERVER_DIR))
     log = open(LOG_DIR / "server.log", "a")
-    # Colab 内のリンク(Colab のプロキシ)からも届くよう、Colab では IPv4 と IPv6 の両方で待ち受ける
-    # (プロキシは localhost に接続し、localhost が IPv6 の ::1 になることがある。
-    #  Colab の VM は外から直接は届かない。届いてもパスワードが無ければ使えない)
-    host = "dual" if IN_COLAB else "127.0.0.1"
     _procs["server"] = subprocess.Popen(
-        [sys.executable, "-m", "invoice_server", "--dist", str(APP_DIR), "--host", host, "--port", str(port)],
+        [sys.executable, "-m", "invoice_server", "--dist", str(APP_DIR), "--host", "127.0.0.1", "--port", str(port)],
         cwd=SERVER_DIR, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
     )
     _wait_http(f"http://127.0.0.1:{port}/healthz", _procs["server"], LOG_DIR / "server.log")
+
+
+#: ノートブックの中(カーネルのプロセス内)で動かしているサーバー
+_inproc: dict[str, object] = {}
+
+
+def _launch_inprocess(port: int, password: str) -> None:
+    """Colab では、サーバーをノートブックのカーネルの中(裏のスレッド)で動かす。
+    Colab のプロキシ(新しいタブで開くリンク)は、この形で動かしたサーバーに確実に届く"""
+    import importlib
+    import threading
+
+    if str(SERVER_DIR) not in sys.path:
+        sys.path.insert(0, str(SERVER_DIR))
+    import uvicorn
+    import invoice_server.ocr as ocr_mod
+    import invoice_server.app as app_mod
+
+    # 「1. 準備」で取り込み直したプログラムを使う
+    importlib.reload(ocr_mod)
+    importlib.reload(app_mod)
+    logf = open(LOG_DIR / "server.log", "a", encoding="utf-8")
+
+    def log(msg: str) -> None:
+        logf.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+        logf.flush()
+
+    app = app_mod.create_app(APP_DIR, password=password, version=_ui_version().get("version", ""), log=log)
+    o = app.state.ocr
+    log(f"[invoice] OCR: {o.provider} (det={o.det_provider}, rec={o.rec_provider})")
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning", proxy_headers=True, forwarded_allow_ips="*"))
+    t = threading.Thread(target=server.run, name="invoice-server", daemon=True)
+    t.start()
+    _inproc.update(server=server, thread=t)
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        if _http_ok(f"http://127.0.0.1:{port}/healthz"):
+            log(f"[invoice] listening: 0.0.0.0:{port}(ノートブックの中)")
+            return
+        if not t.is_alive():
+            break
+        time.sleep(0.3)
+    raise RuntimeError("サーバーを起動できませんでした:\n" + (LOG_DIR / "server.log").read_text(encoding="utf-8", errors="replace")[-3000:])
+
+
+def _server_alive() -> bool:
+    if _inproc:
+        t = _inproc.get("thread")
+        return bool(t) and t.is_alive()  # type: ignore[union-attr]
+    p = _procs.get("server")
+    return p is not None and p.poll() is None
+
+
+def _stop_server() -> None:
+    if _inproc:
+        srv, t = _inproc.get("server"), _inproc.get("thread")
+        srv.should_exit = True  # type: ignore[union-attr]
+        if t:
+            t.join(10)  # type: ignore[union-attr]
+        _inproc.clear()
+    p = _procs.pop("server", None)
+    if p and p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(10)
+        except subprocess.TimeoutExpired:
+            p.kill()
 
 
 def _wait_http(url: str, proc: subprocess.Popen, logfile: Path, timeout: float = 180) -> None:
@@ -197,8 +263,8 @@ def _http_ok(url: str, timeout: float = 5) -> bool:
 
 def _server_line(logfile: Path) -> str:
     for line in logfile.read_text(encoding="utf-8", errors="replace").splitlines()[::-1]:
-        if line.startswith("[invoice] OCR:"):
-            return line.replace("[invoice] ", "")
+        if "[invoice] OCR:" in line:
+            return line.split("[invoice] ", 1)[1]
     return ""
 
 
@@ -276,15 +342,12 @@ def _start_watchdog() -> None:
         fails = 0
         while not stop_ev.wait(10):
             port = int(_state["port"])
-            server = _procs.get("server")
-            ok = server is not None and server.poll() is None and _http_ok(f"http://127.0.0.1:{port}/healthz")
+            ok = _server_alive() and _http_ok(f"http://127.0.0.1:{port}/healthz")
             fails = 0 if ok else fails + 1
             if fails >= 2:
                 _note("サーバーが止まっていたので起動し直します(パスワードは同じです)")
                 try:
-                    p = _procs.pop("server", None)
-                    if p and p.poll() is None:
-                        p.kill()
+                    _stop_server()
                     _launch_server(port, str(_state["password"]))
                     fails = 0
                 except Exception as e:
@@ -305,37 +368,51 @@ def _start_watchdog() -> None:
 def diagnose() -> None:
     """うまく開けないときの確認(この結果を共有してもらえると原因を特定しやすい。パスワードは表示しません)"""
     port = int(_state.get("port", 8765))
-    server = _procs.get("server")
     tunnel = _procs.get("tunnel")
     print("Colab:", IN_COLAB, "/ GPU:", has_gpu(), "/ UI:", _ui_version().get("version", "?"))
-    print("サーバーのプロセス:", "動作中" if server and server.poll() is None else f"停止(終了コード {server.poll() if server else '-'})")
+    print("サーバー:", ("動作中" if _server_alive() else "停止"), "(ノートブックの中)" if _inproc else "(別プロセス)")
     for h in ("127.0.0.1", "localhost", "[::1]"):
         print(f"サーバーの応答({h}):", "OK" if _http_ok(f"http://{h}:{port}/healthz", timeout=3) else "応答なし")
     print("トンネルのプロセス:", "動作中" if tunnel and tunnel.poll() is None else ("停止" if tunnel else "なし"))
     if _state.get("public"):
         print("公開リンクの応答:", "OK" if _http_ok(str(_state["public"]) + "/healthz", timeout=10) else "応答なし", _state["public"])
-    for name in ("monitor", "server", "cloudflared"):
+    for name in ("monitor", "server", "proxy-test", "cloudflared"):
         print(f"\n----- {name}.log(最後の部分)-----")
         logs(name, tail=25)
 
 
-def display_links(info: dict | None = None, height: int = 900) -> None:
-    """起動結果を表示する。公開リンクがあればリンクとパスワード、無ければノートブックの中にアプリを表示する"""
+def colab_url(port: int) -> str | None:
+    """Colab のプロキシのリンク(このノートブックを開いている Google アカウントのブラウザだけで開ける)"""
+    try:
+        from google.colab.output import eval_js  # type: ignore
+
+        return str(eval_js(f"google.colab.kernel.proxyPort({port})")).rstrip("/")
+    except Exception:
+        return None
+
+
+def display_links(info: dict | None = None) -> None:
+    """起動結果(リンクとパスワード)を表示する"""
     info = info or dict(_state)
     pw = html.escape(str(info["password"]))
     engine = html.escape(info.get("engine") or "")
     if info.get("public"):
         url = html.escape(str(info["public"]))
-        body = (f'<a href="{url}/login" target="_blank" style="{_BTN}">アプリを開く(公開リンク)</a>'
-                f'<div style="margin:6px 0 2px;color:#64748b;font-size:12px">{url}</div>'
-                f'<div style="font-size:12px;margin-top:4px">ワンクリックでログイン: <a href="{url}/login#pw={pw}" target="_blank">{url}/login#pw=…</a>'
-                '<span style="color:#64748b">(パスワード入りのリンクです。人に送らないでください)</span></div>'
-                f'<div style="margin-top:10px">パスワード: <code style="font-size:15px;background:#f1f5f9;color:#0f172a;padding:2px 8px;border-radius:6px">{pw}</code>'
-                f'<button onclick="navigator.clipboard.writeText(\'{pw}\');this.textContent=\'コピーしました\'" style="margin-left:6px">コピー</button></div>')
+        note = "公開リンク(リンクとパスワードを知っている人が開けます)"
     else:
-        body = '<div>下にアプリを表示します(このノートブックを開いている人だけが見られます)。</div>'
+        cu = colab_url(int(info["port"]))
+        url = html.escape(cu) if cu else None
+        note = "Colab のリンク(このノートブックを開いている Google アカウントのブラウザだけで開けます)"
+    if url:
+        body = (f'<a href="{url}/login#pw={pw}" target="_blank" style="{_BTN}">アプリを開く</a>'
+                f'<div style="margin:6px 0 2px;color:#64748b;font-size:12px">{note}。ボタンは自動でログインします(人に送らないでください)</div>'
+                f'<div style="font-size:12px;margin-top:4px">ログイン画面だけ開く: <a href="{url}/login" target="_blank">{url}/login</a></div>')
+    else:
+        body = f'<div>リンクを作れませんでした。ローカル: {html.escape(str(info["local"]))}</div>'
     out = f"""<div style="font-family:system-ui,sans-serif;border:1px solid #cbd5e1;border-radius:12px;padding:14px 16px;max-width:640px">
 <div style="font-weight:700;margin-bottom:8px">インボイス確認ツール(Colab)を起動しました</div>{body}
+<div style="margin-top:10px">パスワード: <code style="font-size:15px;background:#f1f5f9;color:#0f172a;padding:2px 8px;border-radius:6px">{pw}</code>
+<button onclick="navigator.clipboard.writeText('{pw}');this.textContent='コピーしました'" style="margin-left:6px">コピー</button></div>
 <div style="margin-top:6px;color:#64748b;font-size:12px">{engine}。このノートブックを止めるかランタイムが切断されると使えなくなります。</div></div>"""
     try:
         from IPython.display import HTML, display  # type: ignore
@@ -343,21 +420,50 @@ def display_links(info: dict | None = None, height: int = 900) -> None:
         display(HTML(out))
     except Exception:
         print(json.dumps({k: v for k, v in info.items() if k != "password"}, ensure_ascii=False, indent=2))
-        return
-    if not info.get("public"):
-        show_in_notebook(height)
 
 
 def show_in_notebook(height: int = 900) -> None:
-    """ノートブックの中(出力欄)にアプリを表示する。Colab のプロキシを通るので、このノートブックを開いている人だけが見られる。
-    新しいタブで開く方式は、ブラウザのセキュリティ強化で動かないことがあるため使わない"""
+    """ノートブックの出力欄の中にアプリを表示する(ブラウザによっては表示されません。そのときは「アプリを開く」を使ってください)"""
     try:
         from google.colab import output  # type: ignore
     except Exception:
         print("Colab の外では使えません。ローカル:", _state.get("local"))
         return
-    # 出力欄の中では自動でログインする(パスワードは出力欄の中だけで使い、URL の # 以降なのでサーバーには送られない)
     output.serve_kernel_port_as_iframe(int(_state["port"]), path=f"/login#pw={_state['password']}", height=height)
+
+
+def proxy_test(port: int = 8009) -> None:
+    """Colab のリンク(プロキシ)そのものが使えるかを、標準ライブラリだけの小さなテスト用サーバーで確かめる。
+    テスト用のリンクが開けてアプリが開けなければ、原因はアプリのサーバー側にある"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><h1>テスト OK</h1><p>Colab のリンクは使えます。</p>".encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            with open(LOG_DIR / "proxy-test.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%H:%M:%S')} GET {self.path} host={self.headers.get('host')} from={self.client_address[0]}\n")
+
+        def log_message(self, *a):
+            pass
+
+    if not _watch.get("proxy_test"):
+        srv = ThreadingHTTPServer(("0.0.0.0", port), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        _watch["proxy_test"] = srv
+    url = colab_url(port)
+    try:
+        from IPython.display import HTML, display  # type: ignore
+
+        display(HTML(f'<a href="{html.escape(url or "")}/" target="_blank" style="{_BTN};background:#475569">テスト用のリンクを開く</a>'
+                     '<div style="font-size:12px;color:#64748b;margin-top:4px">「テスト OK」と表示されれば、Colab のリンクは使えています。開いたあと、もう一度「診断」を実行してください</div>'))
+    except Exception:
+        print("テスト用のリンク:", url)
 
 
 _BTN = "display:inline-block;background:#0d9488;color:#fff;padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600"
@@ -367,7 +473,8 @@ def stop(quiet: bool = False) -> None:
     ev = _watch.pop("stop", None)
     if ev:
         ev.set()  # type: ignore[attr-defined]
-    for name in ("tunnel", "server"):
+    _stop_server()
+    for name in ("tunnel",):
         p = _procs.pop(name, None)
         if p and p.poll() is None:
             p.terminate()
