@@ -26,6 +26,12 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      # Colab 版のノートブックが UI をまとめてダウンロードできるよう、ビルド一式を zip にして同梱
+      - name: Bundle UI for Colab
+        run: |
+          cd dist && zip -q -r ../app.zip . && cd ..
+          mkdir -p dist/colab && mv app.zip dist/colab/app.zip
+          ls -la dist/colab
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

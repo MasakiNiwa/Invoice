@@ -5,6 +5,7 @@
 import type { OcrBackend } from './engine'
 import { modelsCached, type PaddleBackendPref, type Provider } from './paddle-core'
 import { AbortError, type OcrParams, type OcrResult } from './pool'
+import type { ServerEngine } from './server'
 
 export { webGpuAvailable } from './paddle-core'
 export type { PaddleBackendPref } from './paddle-core'
@@ -15,7 +16,8 @@ export interface PaddleStatus {
   state: 'idle' | 'loading' | 'ready' | 'error'
   status: string
   progress: number
-  provider: Provider | null
+  /** server = Colab 版サーバーで認識 */
+  provider: Provider | 'server' | null
   error?: string
 }
 
@@ -133,8 +135,17 @@ export class PaddleEngine implements OcrBackend {
   }
 }
 
+/** PaddleOCR の実行先(ブラウザ内 / Colab 版サーバー)。どちらも同じ使い方ができる */
+export type PaddleLike = PaddleEngine | ServerEngine
+
 let shared: PaddleEngine | null = null
-export function getPaddle(pref: PaddleBackendPref): PaddleEngine {
+let server: ServerEngine | null = null
+/** Colab 版サーバーで認識する(null でブラウザ内に戻す) */
+export function setServerEngine(e: ServerEngine | null) {
+  server = e
+}
+export function getPaddle(pref: PaddleBackendPref): PaddleLike {
+  if (server) return server
   if (!shared || shared.pref !== pref) {
     shared?.dispose()
     shared = new PaddleEngine(pref)

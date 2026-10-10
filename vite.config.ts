@@ -21,6 +21,13 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    // Colab 版のノートブック・サーバーが UI の版を確認するためのファイル
+    {
+      name: 'version-json',
+      generateBundle() {
+        this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: pkg.version, commit, date: new Date().toISOString() }) })
+      },
+    },
     // PWA: ホーム画面に追加・オフライン動作。アプリ本体は事前キャッシュ、大きな OCR エンジン(wasm)は初回利用時にキャッシュ
     VitePWA({
       registerType: 'prompt',
@@ -47,6 +54,8 @@ export default defineConfig({
         globIgnores: ['**/ocr/**', '**/paddle/**', '**/*.wasm'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: 'index.html',
+        // Colab 版サーバーのログイン画面と API はキャッシュせず、毎回サーバーへ
+        navigateFallbackDenylist: [/\/login$/, /\/api\//],
         runtimeCaching: [
           { urlPattern: /\.wasm$/, handler: 'CacheFirst', options: { cacheName: 'ocr-wasm', expiration: { maxEntries: 8 } } },
           { urlPattern: /\/ocr\//, handler: 'CacheFirst', options: { cacheName: 'ocr-tesseract', expiration: { maxEntries: 16 } } },

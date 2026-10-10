@@ -6,3 +6,4 @@ public/pdfjs
 *.log
 .DS_Store
 coverage
+__pycache__/

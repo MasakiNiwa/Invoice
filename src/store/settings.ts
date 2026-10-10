@@ -36,6 +36,8 @@ export interface Settings {
   slowMo: number
   /** 推定補正候補を表示 */
   showCorrections: boolean
+  /** Colab 版サーバーから開いているとき、文字認識をサーバーで行う */
+  useServer: boolean
   theme: Theme
 }
 
@@ -55,6 +57,7 @@ export const defaultSettings: Settings = {
   showAnimation: true,
   slowMo: 0,
   showCorrections: true,
+  useServer: true,
   theme: 'system',
 }
 
@@ -80,6 +83,6 @@ export const useSettings = create<SettingsStore>()(
 )
 
 export function pickSettings(s: Settings): Settings {
-  const { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, splitDocuments, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme } = s
-  return { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, splitDocuments, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, theme }
+  const { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, splitDocuments, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, useServer, theme } = s
+  return { engine, paddleBackend, preloadModels, autoRotate, saveHistory, refineRequirements, batchPdf, splitDocuments, workers, useJapanese, strength, earlyExit, showAnimation, slowMo, showCorrections, useServer, theme }
 }

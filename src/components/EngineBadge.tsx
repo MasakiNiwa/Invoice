@@ -1,4 +1,5 @@
-import { CheckCircle2, Cpu, Loader2, TriangleAlert, Zap } from 'lucide-react'
+import { CheckCircle2, Cloud, Cpu, Loader2, TriangleAlert, Zap } from 'lucide-react'
+import { useServer } from '../store/server'
 import { usePaddleStatus } from '../hooks/usePaddleStatus'
 import { useSettings } from '../store/settings'
 
@@ -6,10 +7,21 @@ import { useSettings } from '../store/settings'
 export function EngineBadge() {
   const engine = useSettings((s) => s.engine)
   const st = usePaddleStatus()
+  const server = useServer((s) => (s.active ? s.info : null))
   if (engine === 'tesseract') {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
         <Cpu size={13} /> Tesseract
+      </span>
+    )
+  }
+  if (server && st?.provider === 'server') {
+    return (
+      <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${st.state === 'error' ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300' : 'bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300'}`} title={st.error}>
+        {st.state === 'error' ? <TriangleAlert size={13} /> : <Cloud size={13} />} Colab で認識
+        <span className="inline-flex items-center gap-0.5 font-semibold">
+          {server.provider === 'cuda' ? <><Zap size={12} />GPU{server.gpu ? ` (${server.gpu})` : ''}</> : 'CPU'}
+        </span>
       </span>
     )
   }

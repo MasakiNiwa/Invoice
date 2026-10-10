@@ -346,7 +346,8 @@ export async function runScan(
     log('info', 'PDFのテキスト層で読み取れたため、文字認識(OCR)は使いません')
   } else if (engine === 'paddle') {
     const paddle = getPaddle(settings.paddleBackend)
-    log('info', 'PaddleOCR(PP-OCRv5)を準備中…初回はモデル(約50MB)のダウンロードに時間がかかります')
+    if (paddle.pref === 'server') log('info', `Colab のサーバーで文字認識します(${paddle.label})`)
+    else log('info', 'PaddleOCR(PP-OCRv5)を準備中…初回はモデル(約50MB)のダウンロードに時間がかかります')
     try {
       await paddle.init(onModel)
       layoutPool = digitPool = paddle
@@ -399,7 +400,8 @@ export async function runScan(
     let done = 0
     const results: T[] = []
     // 先に全部キューへ入れると早期終了できないので、ワーカー数ずつ流す
-    const batch = Math.max(1, settings.workers)
+    // Colab 版サーバーは複数の認識を同時に処理できるので、その数だけ並べて送る
+    const batch = Math.max(1, settings.workers, (digitPool as { parallel?: number }).parallel ?? 0)
     for (let i = 0; i < jobs.length; i += batch) {
       check()
       if (stopWhenConfident && confident()) {
@@ -720,8 +722,17 @@ export async function runScan(
           const rect = { x: part.rect.x - h * v.px, y: part.rect.y - h * v.py, w: part.rect.w + h * v.px * 2, h: h * (1 + v.py * 2) }
           // Paddle は認識器が高さを揃えるので、小さい行だけ拡大。Tesseract は文字高 ≒ 48px に
           const scale = engine === 'paddle' ? Math.max(1, Math.min(4, 32 / h)) : Math.max(0.6, Math.min(5, 48 / h))
-          const { res } = await readCrop(layoutPool, rect, scale, v.mode, { psm: '7' }, 'detail', `行${t.i + 1}`)
-          const text = res.lines.map((l) => l.text).join(' ').trim()
+          // PaddleOCR は余白ごと1行として読むと文字が小さくなって誤読しやすいので、切り出した中で文字行を検出し直し、
+          // 元の行の高さの帯にある文字行だけを使う(上下の行の切れ端は除く)
+          const { res } = await readCrop(layoutPool, rect, scale, v.mode, { psm: engine === 'paddle' ? '6' : '7' }, 'detail', `行${t.i + 1}`)
+          let lines = res.lines
+          if (engine === 'paddle') {
+            const c = clampRect(rect, W, H)
+            const top = 16 + (part.rect.y - c.y) * scale
+            const bottom = top + part.rect.h * scale
+            lines = lines.filter((l) => l.rect.y + l.rect.h / 2 > top && l.rect.y + l.rect.h / 2 < bottom).sort((a, b) => a.rect.x - b.rect.x)
+          }
+          const text = lines.map((l) => l.text).join(' ').trim()
           const key = `${t.i}/${pi}`
           if (text) (readings.get(key) ?? readings.set(key, []).get(key)!).push({ text, conf: res.conf })
         }),

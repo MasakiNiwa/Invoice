@@ -7,9 +7,11 @@ import SettingsPage from '../pages/SettingsPage'
 import HelpPage from '../pages/HelpPage'
 import AboutPage from '../pages/AboutPage'
 import HistoryPage from '../pages/HistoryPage'
+import { useServerMode } from '../store/server'
 
 export default function App() {
   useTheme()
+  useServerMode()
   return (
     <HashRouter>
       <TopBar />

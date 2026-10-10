@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { RotateCcw } from 'lucide-react'
 import { useSettings, type Engine, type PaddleBackendPref, type ScanStrength, type Theme } from '../store/settings'
 import { webGpuAvailable } from '../lib/ocr/paddle'
+import { useServer } from '../store/server'
 
 function Row({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
   return (
@@ -48,10 +49,35 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
 
 export default function SettingsPage() {
   const s = useSettings()
+  const server = useServer((x) => x.info)
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <h1 className="text-xl font-bold">設定</h1>
       <p className="text-xs text-slate-500">設定はこの端末のブラウザに保存されます。</p>
+
+      {server && (
+        <section className="card px-4">
+          <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-violet-600">Colab サーバー</h2>
+          <Row
+            title="Colab のサーバーで文字認識する"
+            desc={`Google Colab の${server.provider === 'cuda' ? `GPU(${server.gpu ?? 'GPU'})` : 'CPU'}で PaddleOCR を動かします。ブラウザにモデルをダウンロードせず、画像だけを送って読み取ります(エンジンが PaddleOCR のとき)。オフにするとブラウザ内で認識します。`}
+          >
+            <Toggle checked={s.useServer} onChange={(v) => s.set({ useServer: v })} />
+          </Row>
+          <Row title="ログアウト" desc="この端末のログインを終了します。ノートブックを止めると、リンクとパスワードは使えなくなります。">
+            <button
+              type="button"
+              className="btn-ghost px-3 py-1.5 text-sm"
+              onClick={async () => {
+                await fetch(new URL('./api/logout', document.baseURI), { method: 'POST' }).catch(() => {})
+                location.href = new URL('./login', document.baseURI).href
+              }}
+            >
+              ログアウト
+            </button>
+          </Row>
+        </section>
+      )}
 
       <section className="card px-4">
         <h2 className="pt-4 text-xs font-semibold uppercase tracking-wider text-teal-600">OCRエンジン</h2>
