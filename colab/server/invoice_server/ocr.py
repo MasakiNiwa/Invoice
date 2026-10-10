@@ -93,9 +93,14 @@ class PaddleOcr:
             return ort.InferenceSession(str(path), sess_options=so, providers=gpu if use_gpu else cpu)
 
         # 検出モデルは ORT 形式(CPU 向けに最適化済み)のことがあるので、GPU で作れなければ CPU で動かす
+        # (GPU で作れないときに onnxruntime が出すエラー表示は抑える。CPU で動けば問題ない)
+        quiet = ort.SessionOptions()
+        quiet.graph_optimization_level = so.graph_optimization_level
+        quiet.log_severity_level = 4
         try:
-            self.det = create(det_path, want_gpu)
+            self.det = ort.InferenceSession(str(det_path), sess_options=quiet, providers=gpu if want_gpu else cpu)
         except Exception:
+            print("[invoice] 文字行の検出モデルは GPU に対応していない形式のため CPU で動かします(認識は GPU)", flush=True)
             self.det = create(det_path, False)
         try:
             self.rec = create(rec_path, want_gpu)
